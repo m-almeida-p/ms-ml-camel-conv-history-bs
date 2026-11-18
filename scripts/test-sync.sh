@@ -206,8 +206,6 @@ section_wait() {
   check "no conversation was made for the missing one" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-w2'")"
 }
 
-fake_fail() { curl -s -o /dev/null -X POST http://localhost:8098/__fail -H 'Content-Type: application/json' --data "$1"; }
-
 section_reconcile() {
   echo "== reconcile: an item Foundry kept but we never recorded is adopted, not sent twice"
   if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (needs the fake Foundry's 'drop' fault: skipped with FOUNDRY_MODE=real)"; return 0; fi

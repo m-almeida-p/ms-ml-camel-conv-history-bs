@@ -79,6 +79,8 @@ fxw() { # METHOD PATH [json]: a write to the Foundry API under test (the fake or
   fi
 }
 
+fake_fail() { curl -s -o /dev/null -X POST http://localhost:8098/__fail -H 'Content-Type: application/json' --data "$1"; }
+
 track_foundry_conversation() { FOUNDRY_TRACKED+=("$1"); }
 
 foundry_cleanup() {

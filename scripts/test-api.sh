@@ -22,6 +22,7 @@ LAST_METHOD=""; LAST_PATH=""
 RECORD_DIR="${REPO_DIR}/.devmode-local/records-$$"; mkdir -p "${RECORD_DIR}"
 
 cleanup() {
+  docker start foundry-token >/dev/null 2>&1 || true   # a section stops it
   sql "DELETE FROM camel_history.foundry_conversation_map WHERE conversation_id LIKE 'ta-%';
        DELETE FROM camel_history.conversation_summaries WHERE conversation_id LIKE 'ta-%';
        DELETE FROM camel_history.conversation_messages WHERE conversation_id LIKE 'ta-%'" >/dev/null 2>&1 || true
@@ -56,16 +57,24 @@ header() { echo "${HEADERS}" | grep -i "^$1:" | head -1 | cut -d: -f2- | sed 's/
 log_text() { docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
 log_count() { local out; out="$(log_text)"; grep -cE "$1" <<< "${out}" || true; }
 
-start_project() { # extra NAME=value pairs for the container
-  "${REPO_DIR}/scripts/fake-foundry.sh" start >/dev/null
-  curl -s -o /dev/null -X POST http://localhost:8098/__reset
-  compose up -d foundry-token >/dev/null
-  "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_FOUNDRY_ENDPOINT=${FAKE_ENDPOINT}" "$@" >/dev/null
+wait_started() {
   for _ in $(seq 1 90); do
     log_text | grep -qE 'Apache Camel .* started in|Error starting Camel' && break
     sleep 2
   done
   log_text | grep -q 'Apache Camel .* started in' || { echo "❌  ${PROJECT} did not start:" >&2; log_text | grep -E 'ERROR|Error' | tail -5 >&2; exit 1; }
+}
+
+start_project() { # extra NAME=value pairs for the container
+  "${REPO_DIR}/scripts/fake-foundry.sh" start >/dev/null
+  curl -s -o /dev/null -X POST http://localhost:8098/__reset
+  compose up -d foundry-token >/dev/null
+  restart_project "$@"
+}
+
+restart_project() { # the same project, with other settings (a short Foundry timeout unless told otherwise)
+  "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_FOUNDRY_ENDPOINT=${FAKE_ENDPOINT}" "APP_FOUNDRY_TIMEOUTMS=2000" "$@" >/dev/null
+  wait_started
 }
 
 section_skeleton() {
@@ -337,6 +346,67 @@ ROWS
   check "no Foundry call carried a working header" 0 "$(log_text | grep -c 'IllegalArgumentException' || true)"
 }
 
+section_failures() {
+  echo "== failures: a Foundry that cannot answer is a 503, never a 500 or a 404, and the API recovers by itself"
+  local fives; fives="$(log_count 'answering 500')"   # the log is shared with earlier sections, one of which causes a 500 on purpose
+  seed_messages ta-f1 acc-ta1 <<'ROWS'
+1|appUser|uno|uno|-|false
+2|appMaker|dos|dos|-|false
+ROWS
+  local F="/v1/conversations/ta-f1/messages" mode
+  for mode in 500 429 401; do
+    fake_fail "{\"mode\":\"${mode}\",\"count\":1,\"method\":\"GET\"}"
+    call GET "${F}"; record "fail_${mode}"
+    check "Foundry ${mode}: the API answers 503" 503 "${STATUS}"
+    check "Foundry ${mode}: problem+json, about:blank, titled with the status" "application/problem+json|about:blank|Service Unavailable" "$(header content-type | cut -d';' -f1)|$(echo "${BODY}" | jq -r .type)|$(echo "${BODY}" | jq -r .title)"
+    check "Foundry ${mode}: the answer says nothing about Foundry" 0 "$(echo "${BODY}" | grep -ci 'foundry' || true)"
+    call GET "${F}"
+    check "Foundry ${mode}: the next request works again" "200 1,2" "${STATUS} $(mids)"
+  done
+  echo "   -- Foundry answers slower than the timeout (2000 ms)"
+  fake_fail '{"mode":"slow","count":1,"delayMs":4500,"method":"GET"}'
+  call GET "${F}"; record fail_slow
+  check "a slow Foundry is a 503" 503 "${STATUS}"
+  call GET "${F}"
+  check "and it recovers" "200 1,2" "${STATUS} $(mids)"
+  echo "   -- Foundry has lost the conversation"
+  fxw DELETE "/openai/v1/conversations/$(sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map WHERE conversation_id='ta-f1'")"
+  call GET "${F}"; record fail_gone
+  check "a conversation we map but Foundry lost is a 503, not a 404" 503 "${STATUS}"
+  check "the log says why, for the operator" true "$([ "$(log_count 'no longer has the conversation')" -ge 1 ] && echo true || echo false)"
+  check "no 500 and no stack in the log for any of this" 0 "$(( $(log_count 'answering 500') - fives ))"
+}
+
+section_dependencies() {
+  echo "== dependencies: the token broker down, then the database down"
+  seed_messages ta-g1 acc-ta1 <<'ROWS'
+1|appUser|uno|uno|-|false
+ROWS
+  seed_conversation acc-ta1 ta-g2 "2026-11-18 10:00:00+00" "2026-11-18 09:00:00+00" 1
+  echo "   -- the token broker is down (a fresh start has no token cached)"
+  docker stop foundry-token >/dev/null
+  restart_project
+  call GET "/v1/conversations/ta-g1/messages"; record dep_broker_down
+  check "the messages are a 503" 503 "${STATUS}"
+  check "the log names the broker" true "$([ "$(log_count 'token broker did not answer')" -ge 1 ] && echo true || echo false)"
+  call GET "/v1/conversations?idYapeAccount=acc-ta1"
+  check "the conversation list does not need the broker" 200 "${STATUS}"
+  compose up -d foundry-token >/dev/null 2>&1
+  for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' foundry-token 2>/dev/null)" = healthy ] && break; sleep 1; done
+  call GET "/v1/conversations/ta-g1/messages"
+  check "with the broker back it works" "200 1" "${STATUS} $(mids)"
+  echo "   -- the database is down (a wrong address; the pool gives up after its 5 s timeout)"
+  restart_project "APP_DB_URL=jdbc:postgresql://db-down:5432/postgres?currentSchema=camel_history"
+  call GET /health; record dep_health_down
+  check "health is a 503" 503 "${STATUS}"
+  check "and says unavailable" unavailable "$(echo "${BODY}" | jq -r .status)"
+  call GET "/v1/conversations?idYapeAccount=acc-ta1"; record dep_list_db_down
+  check "the list is a 503" 503 "${STATUS}"
+  call GET "/v1/conversations/ta-g1/messages"; record dep_messages_db_down
+  check "the messages are a 503" 503 "${STATUS}"
+  check "a validation error needs no database: still a 400" 400 "$(call GET '/v1/conversations?idYapeAccount=' >/dev/null; echo "${STATUS}")"
+}
+
 section_checker() {
   echo "== checker: the contract check accepts a good response and rejects broken ones"
   local ref="${REPO_DIR}/../ms-ml-conv-history-bs/docs/ms-ml-conv-history-bs-openapi.yml"
@@ -376,7 +446,7 @@ section_contract() {
   check "every recorded response is on the contract" 0 "${rc}"
 }
 
-ALL_SECTIONS="skeleton validation list messages checker"
+ALL_SECTIONS="skeleton validation list messages failures dependencies checker"
 WANTED="${*:-${ALL_SECTIONS}}"
 start_project
 for s in ${WANTED}; do "section_${s}"; done

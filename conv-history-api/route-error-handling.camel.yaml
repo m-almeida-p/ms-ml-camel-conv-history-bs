@@ -30,6 +30,7 @@
             - java.io.IOException
             - java.io.UncheckedIOException
             - org.springframework.dao.DataAccessResourceFailureException
+            - org.springframework.dao.TransientDataAccessException
             - org.springframework.jdbc.CannotGetJdbcConnectionException
           redeliveryPolicy:
             maximumRedeliveries: "0"

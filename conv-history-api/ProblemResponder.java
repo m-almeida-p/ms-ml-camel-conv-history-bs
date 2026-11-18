@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Builds the response of a failed request as application/problem+json, like the reference service:
  *   ApiProblemException        the status, type, title and detail it carries
- *   IOException (Foundry or the token broker cannot answer)   503, about:blank
+ *   a dependency that cannot answer (Foundry, the token broker, the database)   503, about:blank
  *   anything else              500, about:blank
  * The detail of a 5xx never says what failed; the log does. No detail repeats a value the client sent.
  */
@@ -22,6 +22,35 @@ public class ProblemResponder {
     private static final Logger LOG = LoggerFactory.getLogger("problem");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String SERVER_DETAIL = "Something went wrong. Try again.";
+
+    /** Names of the exceptions that mean "the database cannot be reached", from Spring and the JDBC driver. */
+    private static final String[] DATABASE_DOWN = {
+        "org.springframework.jdbc.CannotGetJdbcConnectionException",
+        "org.springframework.dao.DataAccessResourceFailureException",
+        "org.springframework.dao.TransientDataAccessException",
+        "java.sql.SQLTransientConnectionException",
+        "java.sql.SQLNonTransientConnectionException"
+    };
+
+    /**
+     * True when the failure, or anything it was caused by, is a dependency that cannot answer: an IOException (Foundry and
+     * the token broker raise one) or a database connection failure. The route's onException rule lists the same families.
+     */
+    static boolean dependencyDown(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause()) {
+            if (t instanceof IOException || t instanceof UncheckedIOException) {
+                return true;
+            }
+            for (String name : DATABASE_DOWN) {
+                for (Class<?> c = t.getClass(); c != null; c = c.getSuperclass()) {
+                    if (c.getName().equals(name)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
 
     public void respond(Exchange exchange) throws Exception {
         Exception cause = exchange.getProperty(Exchange.EXCEPTION_CAUGHT, Exception.class);
@@ -34,7 +63,7 @@ public class ProblemResponder {
             type = problem.getType();
             title = problem.getTitle();
             detail = problem.getDetail();
-        } else if (cause instanceof IOException || cause instanceof UncheckedIOException) {
+        } else if (dependencyDown(cause)) {
             status = 503;
             type = "about:blank";
             title = "Service Unavailable";
