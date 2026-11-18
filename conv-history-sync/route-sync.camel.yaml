@@ -1,0 +1,17 @@
+- route:
+    id: routeSync
+    description: 2 Sync
+    note: "One chat message to Foundry. Called by step 1.2.2. Docs: conv-history-sync.md > Routes."
+    nodePrefixId: routeSync
+    routeConfigurationId: errorRules
+    from:
+      id: fromDirectSync
+      description: Called by step 1.2.2
+      uri: direct
+      parameters:
+        name: sync
+      steps:
+        - log:
+            id: logChatMessage
+            description: 2.1 Log the chat message
+            message: "Chat message conversation=${header.conversationId} sequence=${header.sequence}"
