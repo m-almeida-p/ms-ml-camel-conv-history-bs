@@ -318,12 +318,13 @@ section_crash() {
   check "the map names exactly one conversation" 1 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-k2'")"
 
   echo "   -- 3. killed in the middle of a rebuild"
-  store_message ts-k3 1 appUser "r1"; store_message ts-k3 2 appMaker "r2"; store_message ts-k3 3 appUser "r3"
+  store_message ts-k3 1 appUser "r1"; store_message ts-k3 3 appUser "r3"   # row 2 is not stored yet: it arrives late (see rebuild)
   printf '%s\n' $'ts-k3\t1\tUserMessageSent\tr1' $'ts-k3\t3\tUserMessageSent\tr3' | publish
   wait_until "messages 1 and 3 synced" 60 '[ "$(( $(synced ts-k3 1) + $(synced ts-k3 3) ))" -ge 2 ]'
   local old; old="$(fid ts-k3)"
   before="$(fake_conversations)"
   fake_fail '{"mode":"late","count":1,"delayMs":25000,"method":"POST"}'
+  store_message ts-k3 2 appMaker "r2"
   printf '%s\n' $'ts-k3\t2\tAgentMessageSent\tr2\tagent' | publish      # a late message: the conversation must be rebuilt
   wait_until "the rebuild created the new conversation" 40 "[ \"\$(curl -s http://localhost:8098/__state | jq -r '.items | length')\" -ge 0 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8098/api/projects/fake/openai/v1/conversations/${old} -H 'Authorization: Bearer t')\" = 404 ]"
   kill_sync
