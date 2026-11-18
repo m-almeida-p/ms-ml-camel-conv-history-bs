@@ -9,3 +9,6 @@ logs_*.txt
 
 # Local DevMode runner working copies (scripts/devmode-local.sh)
 .devmode-local/
+
+# Working notes and prompts (not part of the project)
+temp/
