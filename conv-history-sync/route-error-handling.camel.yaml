@@ -57,24 +57,12 @@
             constant:
               expression: "true"
           steps:
-            - setProperty:
-                id: storeRejectedReason
-                name: dlqReason
-                expression:
-                  constant:
-                    expression: store-rejected
-            - setProperty:
-                id: storeRejectedField
-                name: dlqField
-                expression:
-                  simple:
-                    expression: "sqlstate-${exception.cause.SQLState}"
-            - setProperty:
-                id: storeRejectedDetail
-                name: dlqDetail
-                expression:
-                  constant:
-                    expression: the store refuses the data for good
+            - bean:
+                id: nameStoreRefusal
+                description: Name the refusal
+                note: "Reason store-rejected, field sqlstate-<code>, found in the cause chain. Docs: conv-history-consumer.md > What happens to each kind of record."
+                ref: storeRefusal
+                method: name
             - to:
                 id: storeRejectedToDeadLetter
                 description: To route 3

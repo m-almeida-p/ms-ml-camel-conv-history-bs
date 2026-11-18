@@ -10,8 +10,9 @@
 #   - the dead-letter log: one line per poison record, with the exact reason,
 #   - that every offset was committed (no lag), so no poison record blocked a partition.
 #
-# It TRUNCATES the three camel_history tables first and removes its rows and its topic afterwards. The
-# real topic and the public.conversation_* tables of ms-ml-conv-history-bs are never touched.
+# It touches only rows whose conversation id starts with "t-" (it removes them first and afterwards) and its own topic.
+# The real rows of camel_history, the real topic and the public.conversation_* tables of ms-ml-conv-history-bs are never
+# touched. (An earlier version truncated the three tables, which would have wiped the real history the API serves.)
 # Needs: the cluster up, the camel_history migrations applied (ml-genai-agents-bs-testing:
 # make migrations/up SERVICE=history FLOW=camel_conversation), python3.
 
@@ -51,7 +52,9 @@ trap cleanup EXIT
 echo "🧪  topic ${TOPIC}, group ${GROUP}"
 sql "SELECT 1 FROM information_schema.schemata WHERE schema_name='camel_history'" | grep -q 1 \
   || { echo "❌  schema camel_history is missing: run the migrations first" >&2; exit 1; }
-sql "TRUNCATE camel_history.conversation_summaries, camel_history.conversation_messages, camel_history.conversation_inbox" >/dev/null
+sql "DELETE FROM camel_history.conversation_summaries WHERE conversation_id LIKE 't-%';
+     DELETE FROM camel_history.conversation_messages  WHERE conversation_id LIKE 't-%';
+     DELETE FROM camel_history.conversation_inbox     WHERE conversation_id LIKE 't-%';" >/dev/null
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --create --topic "${TOPIC}" --partitions 3 --replication-factor 1 >/dev/null 2>&1
 
 echo "🚀  starting the consumer (the first start downloads dependencies, about a minute)"
@@ -138,6 +141,10 @@ good(event("t-p", 1, "UserMessageSent", {"text": "x"}, payload="not json", id_ya
 good(event("t-p", 1, "UserMessageSent", {"text": "x"}, drop=("metadata",), id_yape_account="acc-p"))   # field-missing metadata
 good(event("t-p", 1, "U" * 129, {"text": "x"}, id_yape_account="acc-p"))               # field-range event_name
 
+# --- the store refuses the data for good: Postgres cannot hold a NUL, in a text or anywhere in a jsonb ------------------
+good(event("t-nul", 1, "UserMessageSent", {"text": "before\u0000after"}, id_yape_account="acc-p"))      # sqlstate-22021
+good(event("t-nul", 2, "ToolCallSummary", {"tool": "a\u0000b"}, id_yape_account="acc-p"))                # sqlstate-22P05
+
 # --- a tombstone ---------------------------------------------------------------------------------------------
 put("t-c1", b"")
 PY
@@ -193,12 +200,16 @@ check "payload is stored as JSON, not as a string" "object" "$(sql "SELECT jsonb
 echo "🔎  dead-letter log"
 docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason=' > "/tmp/camel-test-dlq.$$" || true
 got="$(sed -E 's/.*DLQ reason=([a-z-]+) field=.*/\1/' "/tmp/camel-test-dlq.$$" | sort | uniq -c | awk '{print $2"="$1}' | paste -sd' ' -)"
-want="field-missing=2 field-range=6 header=1 json=2 no-schema-header=1 occurred-at=1 payload=1 schema-id=1 schema-violation=1 store-rejected=1"
+want="field-missing=2 field-range=6 header=1 json=2 no-schema-header=1 occurred-at=1 payload=1 schema-id=1 schema-violation=1 store-rejected=3"
 check "poison records by reason" "${want}" "${got}"
-check "every dead-letter line names topic, partition, offset and the body" "17" \
+check "every dead-letter line names topic, partition, offset and the body" "19" \
   "$(grep -cE 'topic=[^ ]+ partition=[0-9]+ offset=[0-9]+ key=.* detail=.* body=' "/tmp/camel-test-dlq.$$")"
 check "the body is in the log, the header bytes shown readable" "1" "$(grep -c 'body=\\x00\\x00\\x00\\x00\\x02{' "/tmp/camel-test-dlq.$$" | awk '{print ($1>0)?1:0}')"
 check "a poison record names its field" "1" "$(grep -c 'reason=field-range field=conversation_id ' "/tmp/camel-test-dlq.$$")"
+check "a NUL is refused for good, by SQLSTATE (22021 in a text, 22P05 in a jsonb)" "1 1" \
+  "$(grep -c 'reason=store-rejected field=sqlstate-22021 ' "/tmp/camel-test-dlq.$$") $(grep -c 'reason=store-rejected field=sqlstate-22P05 ' "/tmp/camel-test-dlq.$$")"
+check "the refused NUL records left nothing in any table" "0" \
+  "$(sql "SELECT (SELECT count(*) FROM camel_history.conversation_inbox WHERE conversation_id='t-nul') + (SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='t-nul')")"
 rm -f "/tmp/camel-test-dlq.$$"
 
 echo "🔎  offsets"

@@ -613,7 +613,7 @@ class DecoderTest {
     void theSyncAndTheConsumerKeepIdenticalCopiesOfTheSharedClasses() throws Exception {
         java.nio.file.Path consumer = java.nio.file.Path.of("../../../conv-history-consumer");
         java.nio.file.Path sync = java.nio.file.Path.of("../../../conv-history-sync");
-        for (String file : new String[] {"ConversationEventDecoder.java", "OffsetCommit.java", "PoisonRecordException.java"}) {
+        for (String file : new String[] {"ConversationEventDecoder.java", "OffsetCommit.java", "PoisonRecordException.java", "StoreRefusal.java"}) {
             assertEquals(java.nio.file.Files.readString(consumer.resolve(file)), java.nio.file.Files.readString(sync.resolve(file)), file + " has drifted between the two projects");
         }
     }
