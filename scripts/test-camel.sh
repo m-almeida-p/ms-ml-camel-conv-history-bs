@@ -20,6 +20,8 @@ status=0
 for m in "${modules[@]}"; do
   [ -f "${REPO_DIR}/tests/camel/${m}/pom.xml" ] || { echo "no module tests/camel/${m}"; continue; }
   echo "== camel tests: ${m}"
+  # the sync module talks to the fake Foundry: start it fresh, so it is always the code in this repo
+  [ "${m}" = sync ] && "${REPO_DIR}/scripts/fake-foundry.sh" start >/dev/null
   docker run --rm --network yape-local -v "${REPO_DIR}:/work" -v camel-tests-m2:/root/.m2 -w "/work/tests/camel/${m}" \
     -e JDBC_URL="jdbc:postgresql://db:5432/postgres?currentSchema=camel_history" \
     maven:3.9-eclipse-temurin-21 mvn -q -B ${filter:+-Dtest="${filter}"} -Dsurefire.failIfNoSpecifiedTests=false test 2>&1 | tail -60 || status=1

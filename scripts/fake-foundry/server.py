@@ -166,6 +166,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        # This server speaks HTTP/1.0 and closes the connection after every answer. Say so: a client that pools connections (the
+        # JDK's does) would otherwise reuse one the server is closing, and fail with "header parser received no bytes".
+        self.send_header("Connection", "close")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
