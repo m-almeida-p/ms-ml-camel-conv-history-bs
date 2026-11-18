@@ -1,3 +1,14 @@
+- rest:
+    id: restHealth
+    description: GET /health
+    get:
+      - id: getHealth
+        description: Health
+        path: /health
+        to:
+          uri: direct
+          parameters:
+            name: health
 - route:
     id: routeHealth
     description: Health
