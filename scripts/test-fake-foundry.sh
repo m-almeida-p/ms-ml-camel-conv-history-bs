@@ -64,6 +64,24 @@ observe() { # base token label: prints one "name=value" line per observation
   req "$base" "$tok" GET "/openai/v1/conversations/$b/items?order=asc&limit=2&after=$first"; echo "asc.after_first=$(echo "$BODY" | jq -r "$TEXTS") more=$(echo "$BODY" | jq -r .has_more)"
   req "$base" "$tok" GET "/openai/v1/conversations/$b/items?order=asc&limit=100&before=$mid"; echo "asc.before_third=$(echo "$BODY" | jq -r "$TEXTS")"
   req "$base" "$tok" GET "/openai/v1/conversations/$b/items/$mid"; echo "item.get=$STATUS $(echo "$BODY" | jq -r '.content[0].text')"
+  # odd items, measured on the real service by scripts/foundry-limits-probe.py
+  req "$base" "$tok" POST /openai/v1/conversations '{}'; o="$(echo "$BODY" | jq -r .id)"; [ "${base}" = "${FAKE}" ] || track_foundry_conversation "$o"
+  for role in system developer; do
+    req "$base" "$tok" POST "/openai/v1/conversations/$o/items" "{\"items\":[{\"type\":\"message\",\"role\":\"${role}\",\"content\":\"x\"}]}"; echo "odd.role_${role}=$STATUS"
+  done
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"message","role":"nobody","content":"x"}]}'; echo "odd.role_nobody=$STATUS $(echo "$BODY" | jq -r '.error.type')"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"message","content":"x"}]}'; echo "odd.no_role=$STATUS"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"message","role":"user","content":null}]}'; echo "odd.null_content=$STATUS"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"banana","role":"user","content":"x"}]}'; echo "odd.unknown_type=$STATUS"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"message","role":"user","content":""}]}'; echo "odd.empty_text=$STATUS $(echo "$BODY" | jq -c '[.data[0].content[0].text]')"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[{"type":"message","role":"assistant","content":"plain"}]}'; echo "odd.assistant_string=$STATUS $(echo "$BODY" | jq -r '.data[0].content[0].type')"
+  req "$base" "$tok" POST "/openai/v1/conversations/$o/items" '{"items":[]}'; echo "odd.empty_items=$STATUS $(echo "$BODY" | jq -c '.data')"
+  req "$base" "$tok" POST /openai/v1/conversations '{"metadata":{"k1":"v","k2":"v","k3":"v","k4":"v","k5":"v","k6":"v","k7":"v","k8":"v","k9":"v","k10":"v","k11":"v","k12":"v","k13":"v","k14":"v","k15":"v","k16":"v","k17":"v"}}'; echo "odd.17_metadata_pairs=$STATUS"; [ "$STATUS" = 200 ] && [ "${base}" != "${FAKE}" ] && track_foundry_conversation "$(echo "$BODY" | jq -r .id)"
+  # text the sync may meet: Foundry gives it back unchanged
+  for case in 'a\u0000b' 'caf\u00e9' 'cafe\u0301' '\ud83d\udc68\u200d\ud83d\udc69' 'a\u2028b' '  padded  ' 'C:\\temp\\new'; do
+    req "$base" "$tok" POST "/openai/v1/conversations/$o/items" "{\"items\":[{\"type\":\"message\",\"role\":\"user\",\"content\":\"${case}\"}]}"
+    echo "text.${case}=$STATUS returned-md5=$(echo "$BODY" | jq -r '.data[0].content[0].text' | shasum | cut -c1-12)"
+  done
   # limits
   req "$base" "$tok" POST /openai/v1/conversations '{}'; d="$(echo "$BODY" | jq -r .id)"; [ "${base}" = "${FAKE}" ] || track_foundry_conversation "$d"
   req "$base" "$tok" POST "/openai/v1/conversations/$d/items" "{\"items\":[$(for i in $(seq 1 20); do msg user "D$i"; [ $i -lt 20 ] && printf ,; done)]}"; echo "batch20=$STATUS $(echo "$BODY" | jq -r '.data|length')"

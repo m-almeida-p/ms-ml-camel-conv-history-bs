@@ -48,11 +48,28 @@ def error(status, code, message, kind="error"):
     return status, {"error": {"code": code, "message": message, "type": kind, "details": []}}
 
 
+ROLES = ("user", "assistant", "system", "developer")
+
+
+def invalid_item(raw):
+    """The 400 the real service gives an item it cannot take, or None. Measured by scripts/foundry-limits-probe.py."""
+    if raw.get("type") != "message":
+        return error(400, "invalid_payload", f"Unsupported item type '{raw.get('type')}' (UnknownItem)", "invalid_request_error")
+    if "role" not in raw:
+        return error(400, "invalid_payload", "Required property 'role' is missing", "invalid_request_error")
+    if raw["role"] not in ROLES:
+        return error(400, "invalid_payload", f"Value '{raw['role']}' is not valid. Allowed: {', '.join(ROLES)}", "invalid_request_error")
+    if not isinstance(raw.get("content"), (str, list)):
+        return error(400, "invalid_payload", "Required discriminator 'content' is missing or not a string", "invalid_request_error")
+    return None
+
+
 def make_item(raw):
     role = raw.get("role", "user")
     content = raw.get("content", "")
     if isinstance(content, str):
-        parts = [{"type": "input_text" if role == "user" else "output_text", "text": content}]
+        # the real service stores a string as input_text, whoever wrote it
+        parts = [{"type": "input_text", "text": content}]
     else:
         parts = [{"type": p.get("type", "input_text"), "text": p.get("text", "")} for p in content]
     SEQ[0] += 1
@@ -83,6 +100,10 @@ def page(rows, query):
 def add_items(conv, raw_items):
     if len(raw_items) > MAX_ITEMS:
         return error(400, "invalid_payload", f"Array length {len(raw_items)} exceeds maximum {MAX_ITEMS}", "invalid_request_error")
+    for raw in raw_items:
+        problem = invalid_item(raw)
+        if problem:
+            return problem
     made = [make_item(r) for r in raw_items]
     conv["items"].extend(made)
     return 200, {"object": "list", "data": [public(i) for i in made], "first_id": made[0]["id"] if made else None,
@@ -105,7 +126,9 @@ def handle(method, path, query, body, token):
             if len(items) > MAX_ITEMS:
                 return error(400, "invalid_payload", f"Array length {len(items)} exceeds maximum {MAX_ITEMS}", "invalid_request_error")
             conv = {"id": new_id("conv_"), "created_at": int(time.time()), "metadata": body.get("metadata") or {}, "items": []}
-            add_items(conv, items)
+            problem = add_items(conv, items)
+            if problem[0] != 200:
+                return problem
             CONVERSATIONS[conv["id"]] = conv
             return 200, {"id": conv["id"], "object": "conversation", "created_at": conv["created_at"], "metadata": conv["metadata"]}
         if method == "GET":

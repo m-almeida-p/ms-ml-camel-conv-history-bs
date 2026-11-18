@@ -227,7 +227,11 @@ public class FoundryClient {
 
     // ---- the message as a Foundry item -----------------------------------------------------------------------------
 
-    /** A user message is a string; an assistant message must be a list of output_text parts (measured on the real API). */
+    /**
+     * A user message is sent as a string, which Foundry stores as input_text. An assistant message is sent as a list of
+     * output_text parts, the shape Foundry itself returns for the assistant. (Foundry also accepts an assistant string, and
+     * stores it as input_text, so the parts are a choice, not a requirement: scripts/foundry-limits-probe.py.)
+     */
     private static ObjectNode item(String role, String text) {
         ObjectNode item = JSON.createObjectNode().put("type", "message");
         if ("appUser".equals(role)) {
