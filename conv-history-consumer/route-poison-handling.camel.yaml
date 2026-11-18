@@ -1,0 +1,142 @@
+- routeConfiguration:
+    onException:
+      # A record that can never be stored: it breaks the Schema Registry schema or the contract, or cannot be
+      # decoded. Dead-letter it and go on; retrying cannot help and must not block the partition.
+      - onException:
+          id: onPoison
+          exception:
+            - org.apache.camel.ValidationException
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - to:
+                id: poisonToDlq
+                uri: direct
+                parameters:
+                  name: dlq
+
+      # The store refuses the data for good: a violated constraint or data it cannot hold (SQLSTATE class 23 or 22).
+      # Only the SQLSTATE is kept: Postgres puts the failing row in the error detail.
+      - onException:
+          id: onStoreRejected
+          exception:
+            - org.springframework.dao.DataIntegrityViolationException
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - setProperty:
+                id: storeRejectedReason
+                name: dlqReason
+                expression:
+                  constant:
+                    expression: store-rejected
+            - setProperty:
+                id: storeRejectedField
+                name: dlqField
+                expression:
+                  simple:
+                    expression: "sqlstate-${exception.cause.SQLState}"
+            - setProperty:
+                id: storeRejectedDetail
+                name: dlqDetail
+                expression:
+                  constant:
+                    expression: the store refuses the data for good
+            - to:
+                id: storeRejectedToDlq
+                uri: direct
+                parameters:
+                  name: dlq
+
+      # Known transient failures: the database is unreachable or times out, or the schema registry cannot be reached.
+      # The record itself is fine, so it is never dead-lettered for this. It is retried in place, forever, the wait
+      # doubling from 1 s to 30 s, and its offset does not move until it works (as ms-ml-conv-history-bs does).
+      - onException:
+          id: onTransient
+          exception:
+            - org.springframework.dao.TransientDataAccessException
+            - org.springframework.dao.DataAccessResourceFailureException
+            - org.springframework.jdbc.CannotGetJdbcConnectionException
+            - java.net.ConnectException
+            - java.net.SocketTimeoutException
+            - java.io.IOException
+            - java.io.UncheckedIOException
+          redeliveryPolicy:
+            maximumRedeliveries: "-1"
+            redeliveryDelay: "1000"
+            useExponentialBackOff: "true"
+            backOffMultiplier: "2"
+            maximumRedeliveryDelay: "30000"
+            logRetryAttempted: "true"
+            retryAttemptedLogLevel: WARN
+            logStackTrace: "false"
+            logExhausted: "false"
+
+      # Anything no rule above recognizes is unexpected: a bug, or data nobody foresaw. Retrying a bug cannot succeed
+      # and an endless loop would hide it behind a stuck partition, so it is tried 3 more times and then
+      # dead-lettered with reason=unexpected, the exception class in field= and its message in detail=. The
+      # DLQ line keeps the body, so after a fix the records can be replayed by rewinding the group.
+      - onException:
+          id: onUnexpected
+          exception:
+            - java.lang.Exception
+          handled:
+            constant:
+              expression: "true"
+          redeliveryPolicy:
+            maximumRedeliveries: "3"
+            redeliveryDelay: "500"
+            useExponentialBackOff: "true"
+            backOffMultiplier: "2"
+            logRetryAttempted: "true"
+            retryAttemptedLogLevel: WARN
+            logStackTrace: "true"
+            logExhausted: "true"
+          steps:
+            - setProperty:
+                id: unexpectedReason
+                name: dlqReason
+                expression:
+                  constant:
+                    expression: unexpected
+            - setProperty:
+                id: unexpectedField
+                name: dlqField
+                expression:
+                  simple:
+                    expression: "${exception.class.simpleName}"
+            - setProperty:
+                id: unexpectedDetail
+                name: dlqDetail
+                expression:
+                  simple:
+                    expression: "${exception.message}"
+            - to:
+                id: unexpectedToDlq
+                uri: direct
+                parameters:
+                  name: dlq
+
+- route:
+    id: routeDlq
+    description: Dead-letter log
+    nodePrefixId: routeDlq
+    from:
+      id: fromDirectDlq
+      uri: direct
+      parameters:
+        name: dlq
+      steps:
+        - log:
+            id: logPoison
+            description: One ERROR line per poison record, on its own logger (dlq), with the record's text
+            logName: dlq
+            loggingLevel: ERROR
+            message: "DLQ reason=${exchangeProperty.dlqReason} field=${exchangeProperty.dlqField} topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${exchangeProperty.rawKey} detail=${exchangeProperty.dlqDetail} body=${exchangeProperty.rawText}"
+        - bean:
+            id: commitPoisonOffset
+            description: The record is accounted for, so its offset moves and the partition is not blocked
+            ref: offsetCommit
+            method: commit
