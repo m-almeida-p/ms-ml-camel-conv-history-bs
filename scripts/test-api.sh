@@ -54,6 +54,7 @@ problem() { # description, status, type suffix, detail, path   (also records it)
 }
 header() { echo "${HEADERS}" | grep -i "^$1:" | head -1 | cut -d: -f2- | sed 's/^ *//'; }
 log_text() { docker logs "${CONTAINER}" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+log_count() { local out; out="$(log_text)"; grep -cE "$1" <<< "${out}" || true; }
 
 start_project() { # extra NAME=value pairs for the container
   "${REPO_DIR}/scripts/fake-foundry.sh" start >/dev/null
@@ -128,8 +129,9 @@ section_validation() {
   call GET "${A}&page[size]=5";                                   check "list: a valid page[size]" 200 "${STATUS}"
   call GET "/v1/conversations?idYapeAccount=acc-1&page%5Bsize%5D=5"; check "list: page%5Bsize%5D, percent-encoded" 200 "${STATUS}"
   call GET "${A}&page[before]=1792771602218000~conv_v1_abc";      check "list: a well-formed cursor" 200 "${STATUS}"
-  call GET "${M}?page[before]=7&page[size]=3";                    check "messages: a well-formed cursor and size" 200 "${STATUS}"
-  call GET "${M}?unknown=1&page[size]=3";                         check "messages: an unknown parameter is ignored" 200 "${STATUS}"
+  # conv-1 does not exist: a 404 means the parameters passed validation and the lookup ran (a 400 or 500 would not)
+  call GET "${M}?page[before]=7&page[size]=3";                    check "messages: a well-formed cursor and size reach the lookup" 404 "${STATUS}"
+  call GET "${M}?unknown=1&page[size]=3";                         check "messages: an unknown parameter is ignored" 404 "${STATUS}"
   check "no 500 anywhere (the page[...] header trap)" 0 "$(log_text | grep -c 'answering 500' || true)"
 }
 
@@ -149,6 +151,15 @@ walk() { # PATH [label]: follow the Link header to the end; one line per page wi
   while [ -n "${path}" ] && [ "${n}" -lt 20 ]; do
     n=$((n + 1)); call GET "${path}"; record "walk_${2:-x}_${n}"
     echo "${STATUS} $(ids) [$(link_rel)]"
+    path="$(link_target)"
+  done
+}
+
+walk_messages() { # PATH [label]: follow the Link header to the end; one line per page with its message ids
+  local path="$1" n=0
+  while [ -n "${path}" ] && [ "${n}" -lt 20 ]; do
+    n=$((n + 1)); call GET "${path}"; record "walkm_${2:-x}_${n}"
+    echo "${STATUS} $(mids) [$(link_rel)]"
     path="$(link_target)"
   done
 }
@@ -216,6 +227,116 @@ section_list() {
   check "no 500 in the log" 0 "$(log_text | grep -c 'answering 500' || true)"
 }
 
+seed_messages() { # conversation account; stdin lines "sequence|role|text in Foundry|text in our table|flow or -|truncated t/f"
+  local cid="$1" acct="$2" seqs=() roles=() ftexts=() dtexts=() flows=() truncs=() line items="[]" i
+  while IFS='|' read -r s r ft dt fl tr; do seqs+=("$s"); roles+=("$r"); ftexts+=("$ft"); dtexts+=("$dt"); flows+=("$fl"); truncs+=("$tr"); done
+  for i in "${!seqs[@]}"; do
+    if [ "${roles[$i]}" = appUser ]; then
+      items="$(echo "${items}" | jq -c --arg t "${ftexts[$i]}" '. + [{type:"message", role:"user", content:$t}]')"
+    else
+      items="$(echo "${items}" | jq -c --arg t "${ftexts[$i]}" '. + [{type:"message", role:"assistant", content:[{type:"output_text", text:$t}]}]')"
+    fi
+  done
+  fxw POST /openai/v1/conversations "$(jq -cn --arg c "${cid}" --argjson i "${items}" '{metadata:{conversation_id:$c, source:"test"}, items:$i}')"
+  local fid; fid="$(echo "${BODY}" | jq -r .id)"; track_foundry_conversation "${fid}"
+  fx "/openai/v1/conversations/${fid}/items?order=asc&limit=100"
+  local ids=(); while IFS= read -r id; do ids+=("${id}"); done < <(echo "${BODY}" | jq -r '.data[].id')
+  sql "INSERT INTO camel_history.foundry_conversation_map (conversation_id, foundry_conversation_id, last_synced_sequence) VALUES ('${cid}', '${fid}', ${seqs[${#seqs[@]}-1]})" >/dev/null
+  for i in "${!seqs[@]}"; do
+    local author="${acct}" event=UserMessageSent flow="NULL"
+    [ "${roles[$i]}" = appMaker ] && { author="ms-ml-genai-agent-bs"; event=AgentMessageSent; }
+    [ "${flows[$i]}" != "-" ] && flow="'${flows[$i]}'"
+    sql "INSERT INTO camel_history.conversation_messages (conversation_id, sequence, role, author_id, text, truncated, event_name, id_yape_account, flow, occurred_at)
+         VALUES ('${cid}', ${seqs[$i]}, '${roles[$i]}', '${author}', '${dtexts[$i]}', ${truncs[$i]}, '${event}', '${acct}', ${flow},
+                 timestamptz '2026-11-18 10:00:00+00' + interval '1 second' * ${seqs[$i]} + interval '1 millisecond' * (${seqs[$i]} * 37))" >/dev/null
+    sql "INSERT INTO camel_history.foundry_item_map (conversation_id, sequence, foundry_item_id) VALUES ('${cid}', ${seqs[$i]}, '${ids[$i]}')" >/dev/null
+  done
+}
+mids() { echo "${BODY}" | jq -r '[.messages[]._id] | join(",")'; }
+
+section_messages() {
+  echo "== messages: the page of a conversation, text from Foundry, the rest from our table"
+  local M="/v1/conversations/ta-m1/messages"
+  seed_messages ta-m1 acc-ta1 <<'ROWS'
+1|appUser|hola|hola|-|false
+2|appMaker|claro, te ayudo|claro, te ayudo|-|false
+3|appUser|quiero yapear|quiero yapear|p2p|false
+5|appMaker|esto lo dice Foundry|esto lo dice la tabla|p2p|false
+6|appUser|ok|ok|p2p|true
+9|appMaker|listo|listo|-|false
+ROWS
+  sql "INSERT INTO camel_history.conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, occurred_at)
+       VALUES ('ta-m1', 10, 'appUser', 'acc-ta1', 'todavia no esta en Foundry', 'UserMessageSent', 'acc-ta1', now())" >/dev/null
+
+  echo "   -- the newest page"
+  call GET "${M}"; record msg_newest
+  check "200" 200 "${STATUS}"
+  check "every message synced, oldest first, gaps kept" "1,2,3,5,6,9" "$(mids)"
+  check "the conversation _id" ta-m1 "$(echo "${BODY}" | jq -r '.conversation._id')"
+  check "no Link when there is nothing more" "" "$(header link)"
+  check "the text is Foundry's, not the table's" "esto lo dice Foundry" "$(echo "${BODY}" | jq -r '.messages[3].text')"
+  check "a message is not served until it is in Foundry" 0 "$(echo "${BODY}" | jq '[.messages[] | select(._id=="10")] | length')"
+  check "_id is a string" true "$(echo "${BODY}" | jq '[.messages[]._id | type == "string"] | all')"
+  check "type and source" "text|api" "$(echo "${BODY}" | jq -r '.messages[0] | .type + "|" + .source.type')"
+  check "roles" "appUser,appMaker,appUser,appMaker,appUser,appMaker" "$(echo "${BODY}" | jq -r '[.messages[].role] | join(",")')"
+  check "the author: the account for the user, the maker for the assistant" "acc-ta1,ms-ml-genai-agent-bs" "$(echo "${BODY}" | jq -r '[.messages[0].authorId, .messages[1].authorId] | join(",")')"
+  check "metadata.sequence is a number and matches _id" true "$(echo "${BODY}" | jq '[.messages[] | (.metadata.sequence | type == "number") and ((.metadata.sequence | tostring) == ._id)] | all')"
+  check "metadata.eventName" "UserMessageSent,AgentMessageSent" "$(echo "${BODY}" | jq -r '[.messages[0].metadata.eventName, .messages[1].metadata.eventName] | join(",")')"
+  check "metadata.truncated is a boolean, true for message 6" "false,true" "$(echo "${BODY}" | jq -r '[.messages[0].metadata.truncated, .messages[4].metadata.truncated] | join(",")')"
+  check "metadata.flow is present inside a flow and absent outside" "absent,p2p" "$(echo "${BODY}" | jq -r '[(.messages[0].metadata | if has("flow") then .flow else "absent" end), .messages[2].metadata.flow] | join(",")')"
+  check "received is Unix seconds with milliseconds" "$(sql "SELECT trim(trailing '.' FROM trim(trailing '0' FROM round(extract(epoch FROM occurred_at)::numeric, 3)::text)) FROM camel_history.conversation_messages WHERE conversation_id='ta-m1' AND sequence=5")" "$(echo "${BODY}" | jq -r '.messages[3].received | tostring')"
+  check "no working header leaks into the response" 0 "$(echo "${HEADERS}" | grep -ciE '^(conversationid|direction|size|limit|foundry[a-z]*|cursor[a-z]*):' || true)"
+
+  echo "   -- a conversation that is not there"
+  problem "messages: unknown conversation" 404 conversation-not-found "No chat messages were found for this conversation." "/v1/conversations/ta-nope/messages"
+  seed_conversation acc-ta1 ta-m2 "2026-11-18 10:00:00+00" "2026-11-18 09:00:00+00" 1 unmapped
+  problem "messages: a conversation that Foundry does not hold yet" 404 conversation-not-found "No chat messages were found for this conversation." "/v1/conversations/ta-m2/messages"
+
+  echo "   -- paging back with size 2, following the Link header"
+  call GET "${M}?page[size]=2"; record msg_size2
+  check "the newest two, oldest first" "6,9" "$(mids)"
+  check "Link says prev, before the first message of the page, keeping the size" "/v1/conversations/ta-m1/messages?page[before]=6&page[size]=2" "$(link_target)"
+  check "walking back reaches the first message and stops" $'200 6,9 [prev]\n200 3,5 [prev]\n200 1,2 []' "$(walk_messages "${M}?page[size]=2" back)"
+  call GET "${M}?page[before]=5&page[size]=2"; record msg_before
+  check "before 5: the two just older" "2,3" "$(mids)"
+  check "and one more page exists" "/v1/conversations/ta-m1/messages?page[before]=2&page[size]=2" "$(link_target)"
+
+  echo "   -- paging forward"
+  call GET "${M}?page[after]=1&page[size]=2"; record msg_after
+  check "after 1: the two just newer, oldest first" "2,3" "$(mids)"
+  check "Link says next, after the last message of the page" "/v1/conversations/ta-m1/messages?page[after]=3&page[size]=2" "$(link_target)"
+  check "walking forward reaches the last message and stops" $'200 2,3 [next]\n200 5,6 [next]\n200 9 []' "$(walk_messages "${M}?page[after]=1&page[size]=2" fwd)"
+
+  echo "   -- past the ends"
+  call GET "${M}?page[before]=1"; record msg_past_start
+  check "before the first: an empty array" "200 " "${STATUS} $(mids)"
+  check "and no Link" "" "$(header link)"
+  call GET "${M}?page[after]=9"
+  check "after the last synced: an empty array, even though message 10 is stored" "200 " "${STATUS} $(mids)"
+  call GET "${M}?page[size]=1"
+  check "size 1: the newest message" 9 "$(mids)"
+
+  echo "   -- cursors that are not messages of this conversation"
+  problem "messages: a sequence in the gap" 400 invalid-cursor "page[before] or page[after] is not the _id of a message in this conversation." "${M}?page[before]=4"
+  seed_messages ta-m3 acc-ta1 <<'ROWS'
+7|appUser|otra conversacion|otra conversacion|-|false
+ROWS
+  problem "messages: a message of another conversation" 400 invalid-cursor "page[before] or page[after] is not the _id of a message in this conversation." "${M}?page[after]=7"
+  problem "messages: a message that is stored but not in Foundry yet" 400 invalid-cursor "page[before] or page[after] is not the _id of a message in this conversation." "${M}?page[before]=10"
+
+  echo "   -- an item in Foundry that nothing maps is an inconsistency, not a message"
+  seed_messages ta-m4 acc-ta1 <<'ROWS'
+1|appUser|uno|uno|-|false
+ROWS
+  fxw POST "/openai/v1/conversations/$(sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map WHERE conversation_id='ta-m4'")/items" '{"items":[{"type":"message","role":"user","content":"huerfano"}]}'
+  call GET "/v1/conversations/ta-m4/messages"; record msg_orphan_item
+  check "a 500" 500 "${STATUS}"
+  check "problem+json about:blank" "about:blank" "$(echo "${BODY}" | jq -r .type)"
+  check "the answer does not say what failed" "Something went wrong. Try again." "$(echo "${BODY}" | jq -r .detail)"
+  check "the log names the item" true "$([ "$(log_count 'is not in the item map or has no stored message')" -ge 1 ] && echo true || echo false)"
+  check "no Foundry call carried a working header" 0 "$(log_text | grep -c 'IllegalArgumentException' || true)"
+}
+
 section_checker() {
   echo "== checker: the contract check accepts a good response and rejects broken ones"
   local ref="${REPO_DIR}/../ms-ml-conv-history-bs/docs/ms-ml-conv-history-bs-openapi.yml"
@@ -255,7 +376,7 @@ section_contract() {
   check "every recorded response is on the contract" 0 "${rc}"
 }
 
-ALL_SECTIONS="skeleton validation list checker"
+ALL_SECTIONS="skeleton validation list messages checker"
 WANTED="${*:-${ALL_SECTIONS}}"
 start_project
 for s in ${WANTED}; do "section_${s}"; done

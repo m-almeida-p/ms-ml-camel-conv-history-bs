@@ -59,6 +59,26 @@ foundry() { # METHOD PATH [JSON body]
   BODY="$(cat "${out}")"; rm -f "${out}"
 }
 
+FOUNDRY_MODE="${FOUNDRY_MODE:-fake}"   # fake: the fake Foundry (scripts/fake-foundry.sh) | real: the project of .env
+FAKE_URL="http://localhost:8098/api/projects/fake"
+
+fx() { # GET path of the Foundry API under test (the fake or the real one); sets STATUS and BODY
+  if [ "${FOUNDRY_MODE}" = fake ]; then
+    local out; out="$(mktemp)"
+    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' "${FAKE_URL}$1" -H 'Authorization: Bearer test')"; BODY="$(cat "${out}")"; rm -f "${out}"
+  else
+    foundry GET "$1"
+  fi
+}
+fxw() { # METHOD PATH [json]: a write to the Foundry API under test (the fake or the real one); sets STATUS and BODY
+  if [ "${FOUNDRY_MODE}" = fake ]; then
+    local out; out="$(mktemp)"
+    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' -X "$1" "${FAKE_URL}$2" -H 'Authorization: Bearer test' -H 'Content-Type: application/json' ${3:+--data "$3"})"; BODY="$(cat "${out}")"; rm -f "${out}"
+  else
+    foundry "$1" "$2" "${3:-}"
+  fi
+}
+
 track_foundry_conversation() { FOUNDRY_TRACKED+=("$1"); }
 
 foundry_cleanup() {

@@ -19,7 +19,7 @@ GROUP="camel-sync-${RUN}"
 FAKE_ENDPOINT="http://fake-foundry:8098/api/projects/fake"
 KAFKA=(docker exec -i yape-kafka)
 
-FOUNDRY_MODE="${FOUNDRY_MODE:-fake}"   # fake: the fake Foundry (default) | real: the Foundry project of .env
+
 STARTED=0
 EXTRA_ENV=()   # more NAME=value pairs for the project container (a section may restart the project with them)
 
@@ -136,14 +136,6 @@ section_receive() {
   check "every offset is committed (no lag)" 0 "$(group_lag)"
 }
 
-fx() { # GET path of the Foundry API under test (the fake or the real one); sets STATUS and BODY
-  if [ "${FOUNDRY_MODE}" = fake ]; then
-    local out; out="$(mktemp)"
-    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' "http://localhost:8098/api/projects/fake$1" -H 'Authorization: Bearer test')"; BODY="$(cat "${out}")"; rm -f "${out}"
-  else
-    foundry GET "$1"
-  fi
-}
 fid() { sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map WHERE conversation_id='$1'"; }
 texts() { echo "${BODY}" | jq -r '[.data[]? | (.content|if type=="array" then .[0].text else . end)] | join(",")'; }
 section_first() {
@@ -246,15 +238,6 @@ section_reconcile() {
   fx "/openai/v1/conversations/$(fid ts-c2)/items?order=asc&limit=100"
   check "still each message once, in order" "a1,a2,a3" "$(texts)"
   check "three rows in the item map" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-c2'")"
-}
-
-fxw() { # METHOD PATH [json]: a write to the Foundry API under test (the fake or the real one); sets STATUS and BODY
-  if [ "${FOUNDRY_MODE}" = fake ]; then
-    local out; out="$(mktemp)"
-    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' -X "$1" "http://localhost:8098/api/projects/fake$2" -H 'Authorization: Bearer test' -H 'Content-Type: application/json' ${3:+--data "$3"})"; BODY="$(cat "${out}")"; rm -f "${out}"
-  else
-    foundry "$1" "$2" "${3:-}"
-  fi
 }
 
 section_rebuild() {

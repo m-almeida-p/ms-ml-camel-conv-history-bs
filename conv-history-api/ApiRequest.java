@@ -82,6 +82,16 @@ public class ApiRequest {
         }
     }
 
+    /** Step 1.3.1 of the messages route: the conversation is not in Foundry, so it has no chat messages to serve. */
+    public void conversationNotFound(Exchange exchange) throws ApiProblemException {
+        throw ApiProblemException.conversationNotFound(exchange);
+    }
+
+    /** Step 1.4.2.1 of the messages route: the cursor names a message that is not in this conversation's Foundry items. */
+    public void unknownMessageCursor(Exchange exchange) throws ApiProblemException {
+        throw ApiProblemException.invalidCursor(exchange, "page[before] or page[after] is not the _id of a message in this conversation.");
+    }
+
     // ---- helpers ----------------------------------------------------------------------------------------------------
 
     private static long parseMicros(String digits) {

@@ -9,7 +9,7 @@
 - route:
     id: routeMessages
     description: Messages
-    note: "The chat messages of a conversation, oldest first. Docs: conv-history-api.md > Endpoints."
+    note: "The chat messages of a conversation, oldest first, read from Foundry. Docs: conv-history-api.md > Endpoints."
     nodePrefixId: routeMessages
     routeConfigurationId: apiErrors
     from:
@@ -25,16 +25,101 @@
             note: "Conversation id, cursor and page size, as the contract says. A bad one is a 400. Docs: conv-history-api.md > Endpoints."
             ref: apiRequest
             method: messages
-        - setHeader:
-            id: placeholderContentType
-            description: Placeholder (next slice)
-            name: Content-Type
-            expression:
-              constant:
-                expression: application/json
-        - setBody:
-            id: placeholderBody
-            description: Placeholder body
-            expression:
-              constant:
-                expression: '{"messages":[]}'
+        - to:
+            id: findFoundryConversation
+            description: 1.2 Find it in Foundry
+            note: "The map of our conversation to the Foundry conversation that holds its messages. Docs: conv-history-api.md > The messages."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              outputType: SelectOne
+              query: >-
+                SELECT foundry_conversation_id FROM foundry_conversation_map
+                WHERE conversation_id = :#${exchangeProperty.conversationId}
+        - choice:
+            id: whetherMapped
+            description: 1.3 Is it there? (Content-Based Router)
+            when:
+              - id: whenNotMapped
+                description: Not in Foundry
+                expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - bean:
+                      id: conversationNotFound
+                      description: 1.3.1 No chat messages (404)
+                      note: "No chat messages for it in Foundry: the contract's conversation-not-found. Docs: conv-history-api.md > Errors."
+                      ref: apiRequest
+                      method: conversationNotFound
+            otherwise:
+              id: otherwiseMapped
+              description: In Foundry
+              steps:
+                - setProperty:
+                    id: keepFoundryConversation
+                    description: Keep the Foundry id
+                    name: foundryConversationId
+                    expression:
+                      simple:
+                        expression: "${body}"
+        - choice:
+            id: whetherCursor
+            description: 1.4 Is there a cursor? (Content-Based Router)
+            when:
+              - id: whenCursor
+                description: A cursor was sent
+                expression:
+                  simple:
+                    expression: "${exchangeProperty.cursorSequence} != null"
+                steps:
+                  - to:
+                      id: findCursorItem
+                      description: 1.4.1 Find the cursor's item
+                      note: "The Foundry item of the message the cursor names, for Foundry's own paging. A message that is not in Foundry is not a cursor. Docs: conv-history-api.md > The messages."
+                      uri: sql
+                      parameters:
+                        dataSource: "#pgDataSource"
+                        outputType: SelectOne
+                        query: >-
+                          SELECT foundry_item_id FROM foundry_item_map
+                          WHERE conversation_id = :#${exchangeProperty.conversationId}
+                            AND sequence = CAST(:#${exchangeProperty.cursorSequence} AS int)
+                  - choice:
+                      id: whetherCursorKnown
+                      description: 1.4.2 Is it a message of this conversation?
+                      when:
+                        - id: whenCursorUnknown
+                          description: Not a message here
+                          expression:
+                            simple:
+                              expression: "${body} == null"
+                          steps:
+                            - bean:
+                                id: cursorUnknown
+                                description: 1.4.2.1 Invalid cursor (400)
+                                ref: apiRequest
+                                method: unknownMessageCursor
+                      otherwise:
+                        id: otherwiseCursorKnown
+                        description: A known message
+                        steps:
+                          - setProperty:
+                              id: keepCursorItem
+                              description: Keep the item id
+                              name: cursorItemId
+                              expression:
+                                simple:
+                                  expression: "${body}"
+        - bean:
+            id: listFoundryItems
+            description: 1.5 Read the page from Foundry
+            note: "One call. The text and the order are Foundry's; descending then turned round for the past, ascending for the present. Docs: conv-history-api.md > The messages."
+            ref: foundryReader
+            method: listItems
+        - bean:
+            id: buildMessagePage
+            description: 1.6 Build the answer
+            note: "The page as the contract writes it: Foundry's text, our time and metadata, and the Link header when more exist. Docs: conv-history-api.md > The messages."
+            ref: messagePage
+            method: build
