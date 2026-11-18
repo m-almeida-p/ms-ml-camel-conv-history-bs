@@ -1,0 +1,69 @@
+- route:
+    id: routeRebuild
+    description: 5 Rebuild
+    note: "Builds a conversation again in Foundry from the stored messages. Called by step 4.4.1. Docs: conv-history-sync.md > Rebuilding a conversation."
+    nodePrefixId: routeRebuild
+    routeConfigurationId: errorRules
+    from:
+      id: fromDirectRebuild
+      description: Called by step 4.4.1
+      uri: direct
+      parameters:
+        name: rebuild
+      steps:
+        - log:
+            id: logRebuildStart
+            description: 5.1 Log the reason
+            loggingLevel: WARN
+            message: "Rebuilding conversation=${header.conversationId} in Foundry reason=${header.rebuildReason} sequence=${header.sequence}"
+        - to:
+            id: findAllMessages
+            description: 5.2 Find the stored messages
+            note: "Every stored message up to the newest one Foundry should hold, in order. Docs: conv-history-sync.md > Rebuilding a conversation."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              outputType: SelectList
+              outputHeader: allMessages
+              query: >-
+                SELECT sequence, role, text FROM conversation_messages
+                WHERE conversation_id = :#conversationId
+                  AND sequence <= GREATEST(CAST(:#sequence AS int),
+                        COALESCE((SELECT max(sequence) FROM foundry_item_map WHERE conversation_id = :#conversationId), 0))
+                ORDER BY sequence
+        - bean:
+            id: rebuildInFoundry
+            description: 5.3 Build it again in Foundry
+            note: "Deletes the old conversation, creates a new one with the first message and adds the rest in order. One step, so a retry starts over and removes what it left. Docs: conv-history-sync.md > Rebuilding a conversation."
+            ref: foundry
+            method: rebuild
+        - to:
+            id: replaceMaps
+            description: 5.4 Replace the maps
+            note: "One statement: the conversation row, the item rows, and no stale item row. Docs: conv-history-sync.md > Rebuilding a conversation."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              query: >-
+                WITH conv AS (
+                  INSERT INTO foundry_conversation_map (conversation_id, foundry_conversation_id, last_synced_sequence)
+                  VALUES (CAST(:#conversationId AS varchar), CAST(:#foundryConversationId AS text), CAST(:#rebuildLast AS int))
+                  ON CONFLICT (conversation_id) DO UPDATE
+                  SET foundry_conversation_id = EXCLUDED.foundry_conversation_id,
+                      last_synced_sequence = EXCLUDED.last_synced_sequence, created_at = now()
+                  RETURNING conversation_id
+                ), stale AS (
+                  DELETE FROM foundry_item_map
+                  WHERE conversation_id = CAST(:#conversationId AS varchar)
+                    AND sequence NOT IN (SELECT (j->>'sequence')::int FROM json_array_elements(CAST(:#rebuildJson AS json)) j)
+                  RETURNING 1
+                )
+                INSERT INTO foundry_item_map (conversation_id, sequence, foundry_item_id)
+                SELECT CAST(:#conversationId AS varchar), a.sequence, a."itemId"
+                FROM json_to_recordset(CAST(:#rebuildJson AS json)) AS a(sequence int, "itemId" text)
+                ON CONFLICT (conversation_id, sequence) DO UPDATE SET foundry_item_id = EXCLUDED.foundry_item_id, synced_at = now()
+        - log:
+            id: logRebuilt
+            description: 5.5 Log the rebuild
+            loggingLevel: WARN
+            message: "Conversation rebuilt conversation=${header.conversationId} reason=${header.rebuildReason} foundryConversation=${header.foundryConversationId} lastSequence=${header.rebuildLast}"

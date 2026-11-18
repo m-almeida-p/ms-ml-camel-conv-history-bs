@@ -62,7 +62,7 @@ public class FoundryClient {
         String conversationId = exchange.getMessage().getHeader("conversationId", String.class);
         ObjectNode body = JSON.createObjectNode();
         body.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE);
-        body.putArray("items").add(item(exchange));
+        body.putArray("items").add(item(exchange.getMessage().getHeader("storedRole", String.class), exchange.getMessage().getHeader("storedText", String.class)));
         String foundryConversationId = JSON.readTree(call(exchange, "POST", "/openai/v1/conversations", body.toString()).body()).path("id").asText();
         if (foundryConversationId.isEmpty()) {
             throw new FoundryUnavailableException("Foundry created a conversation but returned no id");
@@ -100,13 +100,22 @@ public class FoundryClient {
 
         exchange.getMessage().setHeader("foundryGone", false);
         exchange.getMessage().setHeader("reconcileMismatch", false);
+        exchange.getMessage().setHeader("rebuildReason", "");
         exchange.getMessage().setHeader("adoptedCurrent", false);
         exchange.getMessage().setHeader("adoptCount", 0);
         exchange.getMessage().setHeader("adoptJson", "[]");
 
+        // Foundry only appends. A message below the last synced sequence cannot be put in its place: rebuild.
+        if (current < ((Number) mapRow.get("last_synced_sequence")).intValue()) {
+            exchange.getMessage().setHeader("reconcileMismatch", true);
+            exchange.getMessage().setHeader("rebuildReason", "late-event");
+            return;
+        }
+
         Answer trailing = call(exchange, "GET", base + "/items?order=asc&limit=100" + (lastItemId == null ? "" : "&after=" + lastItemId), null);
         if (trailing.status() == 404) {
             exchange.getMessage().setHeader("foundryGone", true);
+            exchange.getMessage().setHeader("rebuildReason", "gone");
             return;
         }
         JsonNode list = JSON.readTree(trailing.body());
@@ -134,14 +143,16 @@ public class FoundryClient {
         }
         if (mismatch) {
             exchange.getMessage().setHeader("reconcileMismatch", true);
+            exchange.getMessage().setHeader("rebuildReason", "unknown-items");
             return;
         }
         if (!adoptedCurrent) {
             ObjectNode body = JSON.createObjectNode();
-            body.putArray("items").add(item(exchange));
+            body.putArray("items").add(item(exchange.getMessage().getHeader("storedRole", String.class), exchange.getMessage().getHeader("storedText", String.class)));
             Answer added = call(exchange, "POST", base + "/items", body.toString());
             if (added.status() == 404) {
                 exchange.getMessage().setHeader("foundryGone", true);
+                exchange.getMessage().setHeader("rebuildReason", "gone");
                 return;
             }
             record.addObject().put("sequence", current).put("itemId", firstItemId(added.body()));
@@ -162,12 +173,62 @@ public class FoundryClient {
         return text.equals(itemText);
     }
 
+    /**
+     * Builds the Foundry conversation of ours again from the stored messages, in order, when it cannot be repaired by
+     * adding: a message arrived below the last synced sequence, Foundry no longer has the conversation, or it holds an
+     * item nobody can account for.
+     *
+     * Reads the headers convMapRow (the old conversation, or none) and allMessages (every stored message to send: sequence,
+     * role, text), in sequence order. Deletes the old Foundry conversation (a 404 is fine), creates the new one with the
+     * first message and adds the rest, one call each. Sets foundryConversationId, rebuildJson (every item, as
+     * [{"sequence":n,"itemId":"msg_..."}]) and rebuildLast (the highest sequence).
+     *
+     * It is one step, so a retry starts it over. The conversation made by an attempt that failed half way is remembered
+     * in the exchange property rebuildAttempt and deleted by the next attempt, so a retry leaves no orphan.
+     */
+    @SuppressWarnings("unchecked")
+    public void rebuild(Exchange exchange) throws Exception {
+        configure(exchange.getContext());
+        List<Map<String, Object>> messages = exchange.getMessage().getHeader("allMessages", List.class);
+        Map<?, ?> oldRow = exchange.getMessage().getHeader("convMapRow", Map.class);
+        String half = exchange.getProperty("rebuildAttempt", String.class);
+        if (half != null) {
+            call(exchange, "DELETE", "/openai/v1/conversations/" + half, null);
+            exchange.removeProperty("rebuildAttempt");
+        }
+        if (oldRow != null) {
+            call(exchange, "DELETE", "/openai/v1/conversations/" + oldRow.get("foundry_conversation_id"), null);
+        }
+
+        String conversationId = exchange.getMessage().getHeader("conversationId", String.class);
+        ObjectNode create = JSON.createObjectNode();
+        create.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE);
+        create.putArray("items").add(item(String.valueOf(messages.get(0).get("role")), String.valueOf(messages.get(0).get("text"))));
+        String fid = JSON.readTree(call(exchange, "POST", "/openai/v1/conversations", create.toString()).body()).path("id").asText();
+        if (fid.isEmpty()) {
+            throw new FoundryUnavailableException("Foundry created a conversation but returned no id");
+        }
+        exchange.setProperty("rebuildAttempt", fid);
+
+        ArrayNode record = JSON.createArrayNode();
+        record.addObject().put("sequence", ((Number) messages.get(0).get("sequence")).intValue())
+                .put("itemId", firstItemId(call(exchange, "GET", "/openai/v1/conversations/" + fid + "/items?order=asc&limit=1", null).body()));
+        for (int i = 1; i < messages.size(); i++) {
+            ObjectNode body = JSON.createObjectNode();
+            body.putArray("items").add(item(String.valueOf(messages.get(i).get("role")), String.valueOf(messages.get(i).get("text"))));
+            record.addObject().put("sequence", ((Number) messages.get(i).get("sequence")).intValue())
+                    .put("itemId", firstItemId(call(exchange, "POST", "/openai/v1/conversations/" + fid + "/items", body.toString()).body()));
+        }
+        exchange.getMessage().setHeader("foundryConversationId", fid);
+        exchange.getMessage().setHeader("rebuildJson", record.toString());
+        exchange.getMessage().setHeader("rebuildLast", ((Number) messages.get(messages.size() - 1).get("sequence")).intValue());
+        exchange.removeProperty("rebuildAttempt");
+    }
+
     // ---- the message as a Foundry item -----------------------------------------------------------------------------
 
     /** A user message is a string; an assistant message must be a list of output_text parts (measured on the real API). */
-    private static ObjectNode item(Exchange exchange) {
-        String role = exchange.getMessage().getHeader("storedRole", String.class);
-        String text = exchange.getMessage().getHeader("storedText", String.class);
+    private static ObjectNode item(String role, String text) {
         ObjectNode item = JSON.createObjectNode().put("type", "message");
         if ("appUser".equals(role)) {
             item.put("role", "user").put("content", text);

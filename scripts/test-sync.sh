@@ -136,7 +136,8 @@ section_receive() {
 
 fx() { # GET path of the Foundry API under test (the fake or the real one); sets STATUS and BODY
   if [ "${FOUNDRY_MODE}" = fake ]; then
-    BODY="$(curl -s -m 20 "http://localhost:8098/api/projects/fake$1" -H 'Authorization: Bearer test')"; STATUS=200
+    local out; out="$(mktemp)"
+    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' "http://localhost:8098/api/projects/fake$1" -H 'Authorization: Bearer test')"; BODY="$(cat "${out}")"; rm -f "${out}"
   else
     foundry GET "$1"
   fi
@@ -245,7 +246,62 @@ section_reconcile() {
   check "three rows in the item map" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-c2'")"
 }
 
-ALL_SECTIONS="base receive first order wait reconcile"
+fxw() { # METHOD PATH [json]: a write to the Foundry API under test (the fake or the real one); sets STATUS and BODY
+  if [ "${FOUNDRY_MODE}" = fake ]; then
+    local out; out="$(mktemp)"
+    STATUS="$(curl -s -m 20 -o "${out}" -w '%{http_code}' -X "$1" "http://localhost:8098/api/projects/fake$2" -H 'Authorization: Bearer test' -H 'Content-Type: application/json' ${3:+--data "$3"})"; BODY="$(cat "${out}")"; rm -f "${out}"
+  else
+    foundry "$1" "$2" "${3:-}"
+  fi
+}
+
+section_rebuild() {
+  echo "== rebuild: a conversation Foundry cannot repair by adding is built again from the stored messages"
+  dlq_mark
+  echo "   -- a late event: message 2 arrives after message 3"
+  store_message ts-l1 1 appUser "m1"; store_message ts-l1 2 appMaker "m2"; store_message ts-l1 3 appUser "m3"
+  printf '%s\n' $'ts-l1\t1\tUserMessageSent\tm1' $'ts-l1\t3\tUserMessageSent\tm3' | publish
+  wait_until "messages 1 and 3 synced" 60 '[ "$(( $(synced ts-l1 1) + $(synced ts-l1 3) ))" -ge 2 ]'
+  local old; old="$(fid ts-l1)"
+  fx "/openai/v1/conversations/${old}/items?order=asc"; check "Foundry has the gap before the late event" "m1,m3" "$(texts)"
+  printf '%s\n' $'ts-l1\t2\tAgentMessageSent\tm2\tagent' | publish
+  wait_until "the late message rebuilt the conversation" 60 '[ "$(log_count "Conversation rebuilt conversation=ts-l1 reason=late-event")" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-l1)/items?order=asc&limit=100"
+  check "the new conversation holds all three in order" "m1,m2,m3" "$(texts)"
+  check "it is a new Foundry conversation" true "$([ "$(fid ts-l1)" != "${old}" ] && echo true || echo false)"
+  fx "/openai/v1/conversations/${old}"
+  check "the old Foundry conversation was deleted" 404 "${STATUS}"
+  check "the item map has three rows" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-l1'")"
+  check "last synced sequence is 3" 3 "$(sql "SELECT last_synced_sequence FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-l1'")"
+  check "every mapped item exists in the new conversation" 3 "$(for id in $(sql "SELECT foundry_item_id FROM camel_history.foundry_item_map WHERE conversation_id='ts-l1'"); do fx "/openai/v1/conversations/$(fid ts-l1)/items/${id}"; echo "${STATUS}"; done | grep -c '^200$')"
+  printf '%s\n' $'ts-l1\t3\tUserMessageSent\tm3' | publish
+  wait_until "the repeat of message 3 recognised" 60 '[ "$(log_count "Message duplicate conversation=ts-l1 sequence=3")" -ge 1 ]'
+
+  echo "   -- Foundry lost the conversation"
+  store_message ts-g1 1 appUser "g1"; store_message ts-g1 2 appMaker "g2"
+  printf '%s\n' $'ts-g1\t1\tUserMessageSent\tg1' | publish
+  wait_until "message 1 synced" 60 '[ "$(synced ts-g1 1)" -ge 1 ]'
+  old="$(fid ts-g1)"; fxw DELETE "/openai/v1/conversations/${old}"
+  printf '%s\n' $'ts-g1\t2\tAgentMessageSent\tg2\tagent' | publish
+  wait_until "the lost conversation rebuilt" 60 '[ "$(log_count "Conversation rebuilt conversation=ts-g1 reason=gone")" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-g1)/items?order=asc&limit=100"
+  check "the new conversation holds both messages" "g1,g2" "$(texts)"
+  check "the map points at the new conversation" true "$([ "$(fid ts-g1)" != "${old}" ] && echo true || echo false)"
+  check "two rows in the item map" 2 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-g1'")"
+
+  echo "   -- Foundry holds an item nobody can account for"
+  store_message ts-u1 1 appUser "u1"; store_message ts-u1 2 appMaker "u2"
+  printf '%s\n' $'ts-u1\t1\tUserMessageSent\tu1' | publish
+  wait_until "message 1 synced" 60 '[ "$(synced ts-u1 1)" -ge 1 ]'
+  fxw POST "/openai/v1/conversations/$(fid ts-u1)/items" '{"items":[{"type":"message","role":"user","content":"stray"}]}'
+  printf '%s\n' $'ts-u1\t2\tAgentMessageSent\tu2\tagent' | publish
+  wait_until "the unknown item rebuilt the conversation" 60 '[ "$(log_count "Conversation rebuilt conversation=ts-u1 reason=unknown-items")" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-u1)/items?order=asc&limit=100"
+  check "the stray item is gone and the messages are in order" "u1,u2" "$(texts)"
+  check "nothing was dead-lettered in this section" 0 "$(dlq_new)"
+}
+
+ALL_SECTIONS="base receive first order wait reconcile rebuild"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then
