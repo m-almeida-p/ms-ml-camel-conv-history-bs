@@ -22,6 +22,9 @@ LAST_METHOD=""; LAST_PATH=""
 RECORD_DIR="${REPO_DIR}/.devmode-local/records-$$"; mkdir -p "${RECORD_DIR}"
 
 cleanup() {
+  sql "DELETE FROM camel_history.foundry_conversation_map WHERE conversation_id LIKE 'ta-%';
+       DELETE FROM camel_history.conversation_summaries WHERE conversation_id LIKE 'ta-%';
+       DELETE FROM camel_history.conversation_messages WHERE conversation_id LIKE 'ta-%'" >/dev/null 2>&1 || true
   rm -rf "${RECORD_DIR}"
   foundry_cleanup
   "${REPO_DIR}/scripts/devmode-local.sh" stop "${PROJECT}" >/dev/null 2>&1 || true
@@ -130,6 +133,89 @@ section_validation() {
   check "no 500 anywhere (the page[...] header trap)" 0 "$(log_text | grep -c 'answering 500' || true)"
 }
 
+seed_conversation() { # account conversation last first count [unmapped]   (fixtures: a summary, and the Foundry map unless "unmapped")
+  sql "INSERT INTO camel_history.conversation_summaries (id_yape_account, conversation_id, message_count, first_occurred_at, last_occurred_at)
+       VALUES ('$1', '$2', $5, timestamptz '$4', timestamptz '$3')" >/dev/null
+  [ "${6:-}" = unmapped ] || sql "INSERT INTO camel_history.foundry_conversation_map (conversation_id, foundry_conversation_id, last_synced_sequence)
+       VALUES ('$2', 'conv_fixture_$2', 1)" >/dev/null
+}
+micros_of() { sql "SELECT (extract(epoch FROM last_occurred_at) * 1000000)::bigint FROM camel_history.conversation_summaries WHERE conversation_id='$1'"; }
+ids() { echo "${BODY}" | jq -r '[.conversations[]._id] | join(",")'; }
+link_target() { echo "${HEADERS}" | grep -i '^link:' | sed -n 's/^[Ll]ink: <\(.*\)>; rel=.*/\1/p'; }
+link_rel() { echo "${HEADERS}" | grep -i '^link:' | sed -n 's/.*rel="\([a-z]*\)".*/\1/p'; }
+
+walk() { # PATH [label]: follow the Link header to the end; one line per page with its ids; every page is recorded
+  local path="$1" n=0
+  while [ -n "${path}" ] && [ "${n}" -lt 20 ]; do
+    n=$((n + 1)); call GET "${path}"; record "walk_${2:-x}_${n}"
+    echo "${STATUS} $(ids) [$(link_rel)]"
+    path="$(link_target)"
+  done
+}
+
+section_list() {
+  echo "== list: the conversations of an account, most recent first, with cursors and Link"
+  local A="/v1/conversations?idYapeAccount=acc-ta1"
+  seed_conversation acc-ta1 ta-c1 "2026-11-18 10:00:00+00"        "2026-11-18 09:50:00+00" 3
+  seed_conversation acc-ta1 ta-c2 "2026-11-18 10:05:00.123456+00" "2026-11-18 10:01:00+00" 5
+  seed_conversation acc-ta1 ta-c3 "2026-11-18 10:10:00+00"        "2026-11-18 10:06:00+00" 2
+  seed_conversation acc-ta1 ta-c4 "2026-11-18 10:10:00+00"        "2026-11-18 10:08:00+00" 4
+  seed_conversation acc-ta1 ta-c5 "2026-11-18 10:20:00+00"        "2026-11-18 10:12:00+00" 7
+  seed_conversation acc-ta1 ta-c6 "2026-11-18 10:30:00+00"        "2026-11-18 10:25:00+00" 1 unmapped
+  seed_conversation acc-ta2 ta-d1 "2026-11-18 10:15:00+00"        "2026-11-18 10:14:00+00" 9
+
+  echo "   -- the most recent page"
+  call GET "${A}"; record list_newest
+  check "200" 200 "${STATUS}"
+  check "most recent first; the tie on the instant is broken by id, descending" "ta-c5,ta-c4,ta-c3,ta-c2,ta-c1" "$(ids)"
+  check "a conversation that is not in Foundry is not listed" 0 "$(echo "${BODY}" | jq '[.conversations[] | select(._id=="ta-c6")] | length')"
+  check "no Link when there is nothing more" "" "$(header link)"
+  check "the message counts" "7,4,2,5,3" "$(echo "${BODY}" | jq -r '[.conversations[].messageCount] | join(",")')"
+  check "a count is an integer" true "$(echo "${BODY}" | jq '[.conversations[].messageCount | (. == floor)] | all')"
+  check "the cursor is the last instant in microseconds, a ~ and the id" "$(micros_of ta-c2)~ta-c2" "$(echo "${BODY}" | jq -r '.conversations[3].cursor')"
+  check "lastReceived is Unix seconds with milliseconds" "$(sql "SELECT trim(trailing '.' FROM trim(trailing '0' FROM round(extract(epoch FROM last_occurred_at)::numeric, 3)::text)) FROM camel_history.conversation_summaries WHERE conversation_id='ta-c2'")" "$(echo "${BODY}" | jq -r '.conversations[3].lastReceived | tostring')"
+  check "firstReceived too" "$(sql "SELECT trim(trailing '.' FROM trim(trailing '0' FROM round(extract(epoch FROM first_occurred_at)::numeric, 3)::text)) FROM camel_history.conversation_summaries WHERE conversation_id='ta-c1'")" "$(echo "${BODY}" | jq -r '.conversations[4].firstReceived | tostring')"
+  check "no working header leaks into the response" 0 "$(echo "${HEADERS}" | grep -ciE '^(account|limit|direction|size|cursor[a-z]*|storedrole):' || true)"
+
+  echo "   -- paging back with size 2, following the Link header"
+  call GET "${A}&page[size]=2"; record list_size2
+  check "the first page" "ta-c5,ta-c4" "$(ids)"
+  check "its Link says prev and keeps the size" "/v1/conversations?idYapeAccount=acc-ta1&page[before]=$(micros_of ta-c4)~ta-c4&page[size]=2" "$(link_target)"
+  check "rel is prev" prev "$(link_rel)"
+  check "walking back gives every conversation once, in pages of 2, 2, 1" $'200 ta-c5,ta-c4 [prev]\n200 ta-c3,ta-c2 [prev]\n200 ta-c1 []' "$(walk "${A}&page[size]=2" back)"
+
+  echo "   -- paging forward from the oldest"
+  local c1="$(micros_of ta-c1)~ta-c1"
+  call GET "${A}&page[after]=${c1}&page[size]=2"; record list_after
+  check "the nearest more recent two, most recent first" "ta-c3,ta-c2" "$(ids)"
+  check "rel is next" next "$(link_rel)"
+  check "its Link continues from the most recent of the page" "/v1/conversations?idYapeAccount=acc-ta1&page[after]=$(micros_of ta-c3)~ta-c3&page[size]=2" "$(link_target)"
+  check "walking forward reaches the newest and stops" $'200 ta-c3,ta-c2 [next]\n200 ta-c5,ta-c4 []' "$(walk "${A}&page[after]=${c1}&page[size]=2" fwd)"
+
+  echo "   -- past the last"
+  call GET "${A}&page[before]=${c1}"; record list_past_last
+  check "200 with an empty array" "200 " "${STATUS} $(ids)"
+  check "and no Link" "" "$(header link)"
+  call GET "${A}&page[after]=$(micros_of ta-c5)~ta-c5"
+  check "after the newest is empty too" "200 " "${STATUS} $(ids)"
+
+  echo "   -- a cursor is a position: it stays right when a conversation receives a message"
+  local c4="$(micros_of ta-c4)~ta-c4"
+  sql "UPDATE camel_history.conversation_summaries SET last_occurred_at = timestamptz '2026-11-18 11:00:00+00', message_count = message_count + 1 WHERE conversation_id='ta-c1'" >/dev/null
+  call GET "${A}&page[before]=${c4}"; record list_stable
+  check "the page below the old cursor does not change" "ta-c3,ta-c2" "$(ids)"
+  call GET "${A}"
+  check "and the conversation that moved is now first" "ta-c1,ta-c5,ta-c4,ta-c3,ta-c2" "$(ids)"
+  check "with its new count" 4 "$(echo "${BODY}" | jq '.conversations[0].messageCount')"
+
+  echo "   -- accounts do not mix"
+  call GET "/v1/conversations?idYapeAccount=acc-ta2"; record list_other_account
+  check "the other account sees only its own" ta-d1 "$(ids)"
+  call GET "/v1/conversations?idYapeAccount=acc-nobody"; record list_empty
+  check "an account with none gets 200 and an empty array" "200 " "${STATUS} $(ids)"
+  check "no 500 in the log" 0 "$(log_text | grep -c 'answering 500' || true)"
+}
+
 section_checker() {
   echo "== checker: the contract check accepts a good response and rejects broken ones"
   local ref="${REPO_DIR}/../ms-ml-conv-history-bs/docs/ms-ml-conv-history-bs-openapi.yml"
@@ -169,7 +255,7 @@ section_contract() {
   check "every recorded response is on the contract" 0 "${rc}"
 }
 
-ALL_SECTIONS="skeleton validation checker"
+ALL_SECTIONS="skeleton validation list checker"
 WANTED="${*:-${ALL_SECTIONS}}"
 start_project
 for s in ${WANTED}; do "section_${s}"; done
