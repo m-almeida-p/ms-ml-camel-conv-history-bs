@@ -39,6 +39,7 @@ check "a token is returned" true "$([ "${#T1}" -gt 1000 ] && echo true || echo f
 EXP="$(echo "${R1}" | jq -r .expiresIn)"
 check "it lives about an hour" true "$([ "${EXP}" -gt 3000 ] && [ "${EXP}" -le 3600 ] && echo true || echo false)"
 check_contains "it carries an expiry time" "T" "$(echo "${R1}" | jq -r .expiresOn)"
+check "it carries the project endpoint of .env" "${FOUNDRY_ENDPOINT}" "$(echo "${R1}" | jq -r .endpoint)"
 T2="$(from_project http://foundry-token:8099/token | jq -r .accessToken)"
 check "the second call is served from the cache (same token)" "$(printf %s "${T1}" | shasum | cut -c1-40)" "$(printf %s "${T2}" | shasum | cut -c1-40)"
 check "an unknown path is 404" 404 "$(from_project -o /dev/null -w '%{http_code}' http://foundry-token:8099/nothing)"

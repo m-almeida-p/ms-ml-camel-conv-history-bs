@@ -79,7 +79,7 @@ services:
 
   # Gives the Camel projects a Microsoft Foundry token over the network, so no secret goes in a Karavan project
   # (Karavan keeps project files in Git, and a container it starts receives no environment of its own).
-  # Reads only the three FOUNDRY_* variables from .env. Not published on the host. Not labelled for Karavan, so it
+  # Reads only four FOUNDRY_* variables from .env. Not published on the host. Not labelled for Karavan, so it
   # does not show in its Containers tab. Source: scripts/foundry-token-broker/server.py.
   foundry-token:
     image: python:3.13-alpine
@@ -89,6 +89,7 @@ services:
       FOUNDRY_TENANT_ID: ${FOUNDRY_TENANT_ID:-}
       FOUNDRY_CLIENT_ID: ${FOUNDRY_CLIENT_ID:-}
       FOUNDRY_CLIENT_SECRET: ${FOUNDRY_CLIENT_SECRET:-}
+      FOUNDRY_PROJECT_ENDPOINT: ${FOUNDRY_PROJECT_ENDPOINT:-}
     volumes:
       - ./scripts/foundry-token-broker/server.py:/app/server.py:ro
     command: ["python", "-u", "/app/server.py"]

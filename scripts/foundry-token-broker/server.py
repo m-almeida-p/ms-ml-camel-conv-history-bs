@@ -4,11 +4,12 @@
 A container started by Karavan cannot receive a secret without it landing in Git, so the secret stays here and the
 projects ask for a token over the shared Docker network:
 
-    GET /token   -> {"accessToken": "...", "expiresOn": "<UTC ISO>", "expiresIn": <seconds>}
+    GET /token   -> {"accessToken": "...", "expiresOn": "<UTC ISO>", "expiresIn": <seconds>, "endpoint": "<project endpoint>"}
     GET /health  -> {"status": "ok", "configured": true|false}
 
-The token is a Microsoft Entra ID access token for Foundry (client credentials of the service principal in .env). It
-is cached until a minute before it expires, so many callers cost one request to Entra ID. Standard library only.
+The token is a Microsoft Entra ID access token for Foundry (client credentials of the service principal in .env). The
+endpoint is FOUNDRY_PROJECT_ENDPOINT from .env: it names the Azure resource, so it is served here instead of written in
+a project file that goes to Git. It is cached until a minute before it expires, so many callers cost one request to Entra ID. Standard library only.
 The token and the secret are never logged.
 """
 import json
@@ -24,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TENANT = os.environ.get("FOUNDRY_TENANT_ID", "")
 CLIENT = os.environ.get("FOUNDRY_CLIENT_ID", "")
 SECRET = os.environ.get("FOUNDRY_CLIENT_SECRET", "")
+ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "").rstrip("/")
 SCOPE = os.environ.get("FOUNDRY_TOKEN_SCOPE", "https://ai.azure.com/.default")
 PORT = int(os.environ.get("PORT", "8099"))
 MARGIN_SECONDS = 60
@@ -85,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
         except (urllib.error.URLError, OSError, KeyError, ValueError) as err:
             return self._send(502, {"error": "token request failed", "kind": type(err).__name__})
         expires_on = datetime.fromtimestamp(expires_at, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self._send(200, {"accessToken": token, "expiresOn": expires_on, "expiresIn": int(expires_at - time.time())})
+        self._send(200, {"accessToken": token, "expiresOn": expires_on, "expiresIn": int(expires_at - time.time()), "endpoint": ENDPOINT})
 
     def log_message(self, fmt, *args):  # one line per request: method and path only
         print(f"{self.command} {urllib.parse.urlparse(self.path).path} -> {args[1] if len(args) > 1 else '?'}", flush=True)
