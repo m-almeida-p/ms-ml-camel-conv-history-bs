@@ -12,3 +12,5 @@ logs_*.txt
 
 # Working notes and prompts (not part of the project)
 temp/
+
+__pycache__/
