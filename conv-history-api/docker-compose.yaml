@@ -1,0 +1,9 @@
+services:
+  conv-history-api:
+    container_name: conv-history-api
+    image: conv-history-api
+    restart: always
+    ports:
+      - "8086:8080"
+    networks:
+      - karavan

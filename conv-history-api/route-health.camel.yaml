@@ -1,0 +1,25 @@
+- route:
+    id: routeHealth
+    description: Health
+    note: "Answers GET /health. Docs: conv-history-api.md > Endpoints."
+    nodePrefixId: routeHealth
+    from:
+      id: fromHealth
+      description: Called by GET /health
+      uri: direct
+      parameters:
+        name: health
+      steps:
+        - setHeader:
+            id: healthContentType
+            description: Content type
+            name: Content-Type
+            expression:
+              constant:
+                expression: application/json
+        - setBody:
+            id: healthBody
+            description: Body
+            expression:
+              constant:
+                expression: '{"status":"ok"}'
