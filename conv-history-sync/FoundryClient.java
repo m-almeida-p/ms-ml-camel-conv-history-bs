@@ -9,6 +9,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.apache.camel.BindToRegistry;
 import org.apache.camel.CamelContext;
@@ -71,20 +73,93 @@ public class FoundryClient {
     }
 
     /**
-     * Adds the message to the Foundry conversation in the header "convMapRow" (a row of foundry_conversation_map).
-     * Sets "foundryItemId", and "foundryGone" to true when Foundry no longer has that conversation.
+     * Adds the message to a conversation Foundry already has, unless Foundry already holds it.
+     *
+     * This is ONE step on purpose. Foundry has no idempotency key, so a call whose answer is lost (a crash, a timeout)
+     * may still have kept the item, and sending again would duplicate it. Camel retries only the step that failed, so
+     * the check for such an item and the send have to be the same step: every retry looks first.
+     *
+     * The items after the last mapped one are compared, in order, with the stored messages that come next ("candidates").
+     * Those that match are adopted. If the message being handled is not among them, it is sent.
+     *
+     * Reads the headers convMapRow, lastItemRow (the id of the last mapped item, or none) and candidates (the next
+     * stored messages: sequence, role, text), plus storedRole and storedText. Sets:
+     *   adoptJson, adoptCount   every item to record, adopted or new, as [{"sequence":n,"itemId":"msg_..."}]
+     *   adoptedCurrent          true when Foundry already held the message being handled
+     *   reconcileMismatch       true when Foundry holds something we cannot account for: the conversation must be rebuilt
+     *   foundryGone             true when Foundry no longer has the conversation
      */
-    public void appendItem(Exchange exchange) throws Exception {
+    @SuppressWarnings("unchecked")
+    public void addItem(Exchange exchange) throws Exception {
         configure(exchange.getContext());
         Map<?, ?> mapRow = exchange.getMessage().getHeader("convMapRow", Map.class);
-        String foundryConversationId = String.valueOf(mapRow.get("foundry_conversation_id"));
-        ObjectNode body = JSON.createObjectNode();
-        body.putArray("items").add(item(exchange));
-        Answer answer = call(exchange, "POST", "/openai/v1/conversations/" + foundryConversationId + "/items", body.toString());
-        exchange.getMessage().setHeader("foundryGone", answer.status() == 404);
-        if (answer.status() != 404) {
-            exchange.getMessage().setHeader("foundryItemId", firstItemId(answer.body()));
+        String lastItemId = exchange.getMessage().getHeader("lastItemRow", String.class); // one column: the value itself
+        List<Map<String, Object>> candidates = exchange.getMessage().getHeader("candidates", List.class);
+        int current = exchange.getMessage().getHeader("sequence", Integer.class);
+        String base = "/openai/v1/conversations/" + mapRow.get("foundry_conversation_id");
+
+        exchange.getMessage().setHeader("foundryGone", false);
+        exchange.getMessage().setHeader("reconcileMismatch", false);
+        exchange.getMessage().setHeader("adoptedCurrent", false);
+        exchange.getMessage().setHeader("adoptCount", 0);
+        exchange.getMessage().setHeader("adoptJson", "[]");
+
+        Answer trailing = call(exchange, "GET", base + "/items?order=asc&limit=100" + (lastItemId == null ? "" : "&after=" + lastItemId), null);
+        if (trailing.status() == 404) {
+            exchange.getMessage().setHeader("foundryGone", true);
+            return;
         }
+        JsonNode list = JSON.readTree(trailing.body());
+        JsonNode items = list.path("data");
+        ArrayNode record = JSON.createArrayNode();
+        boolean adoptedCurrent = false;
+        int next = 0;
+        boolean mismatch = list.path("has_more").asBoolean(false);
+        for (int i = 0; !mismatch && i < items.size(); i++) {
+            int found = -1;
+            for (int k = next; candidates != null && k < candidates.size(); k++) {
+                if (sameMessage(items.get(i), String.valueOf(candidates.get(k).get("role")), String.valueOf(candidates.get(k).get("text")))) {
+                    found = k;
+                    break;
+                }
+            }
+            if (found < 0) {
+                mismatch = true;
+                break;
+            }
+            int sequence = ((Number) candidates.get(found).get("sequence")).intValue();
+            record.addObject().put("sequence", sequence).put("itemId", items.get(i).path("id").asText());
+            adoptedCurrent |= sequence == current;
+            next = found + 1;
+        }
+        if (mismatch) {
+            exchange.getMessage().setHeader("reconcileMismatch", true);
+            return;
+        }
+        if (!adoptedCurrent) {
+            ObjectNode body = JSON.createObjectNode();
+            body.putArray("items").add(item(exchange));
+            Answer added = call(exchange, "POST", base + "/items", body.toString());
+            if (added.status() == 404) {
+                exchange.getMessage().setHeader("foundryGone", true);
+                return;
+            }
+            record.addObject().put("sequence", current).put("itemId", firstItemId(added.body()));
+        }
+        exchange.getMessage().setHeader("adoptJson", record.toString());
+        exchange.getMessage().setHeader("adoptCount", record.size());
+        exchange.getMessage().setHeader("adoptedCurrent", adoptedCurrent);
+    }
+
+    /** True when the Foundry item is the message: the same role, and the same text. */
+    private static boolean sameMessage(JsonNode item, String role, String text) {
+        String itemRole = item.path("role").asText();
+        if (!("appUser".equals(role) ? "user" : "assistant").equals(itemRole)) {
+            return false;
+        }
+        JsonNode content = item.path("content");
+        String itemText = content.isArray() ? content.path(0).path("text").asText() : content.asText();
+        return text.equals(itemText);
     }
 
     // ---- the message as a Foundry item -----------------------------------------------------------------------------

@@ -112,6 +112,10 @@ ctl /__fail '{"mode":"500","count":-1}' >/dev/null
 req "${FAKE}" tok GET "/openai/v1/conversations?limit=1"; req "${FAKE}" tok GET "/openai/v1/conversations?limit=1"
 check "count -1 keeps failing until reset" 500 "${STATUS}"
 ctl /__reset >/dev/null; req "${FAKE}" tok GET "/openai/v1/conversations?limit=1"; check "reset clears the fault" 200 "${STATUS}"
+ctl /__fail '{"mode":"500","count":1,"method":"POST"}' >/dev/null
+req "${FAKE}" tok GET "/openai/v1/conversations?limit=1"; check "a method filter lets other methods through" 200 "${STATUS}"
+req "${FAKE}" tok POST /openai/v1/conversations '{}'; check "and fails the method it names" 500 "${STATUS}"
+req "${FAKE}" tok POST /openai/v1/conversations '{}'; check "once, as counted" 200 "${STATUS}"
 ctl /__fail '{"mode":"slow","count":1,"delayMs":800}' >/dev/null
 START="$(python3 -I -c 'import time; print(int(time.time()*1000))')"; req "${FAKE}" tok GET "/openai/v1/conversations?limit=1"
 ELAPSED=$(( $(python3 -I -c 'import time; print(int(time.time()*1000))') - START ))

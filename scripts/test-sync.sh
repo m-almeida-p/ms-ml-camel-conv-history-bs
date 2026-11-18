@@ -63,7 +63,7 @@ wait_until() { # description, timeout in seconds, a shell expression that is tru
   for _ in $(seq 1 "${limit}"); do eval "${condition}" && return 0; sleep 1; done
   fail "timed out waiting for: ${what}"
   echo "    last relevant log lines:" >&2
-  log_text | grep -vE 'Unknown keyword|^\s+at |^\s*\.\.\. [0-9]+ more|^$|Fetching project|ConnectException|UnresolvedAddress|Error: null' | tail -16 | cut -c1-240 | sed 's/^/      /' >&2
+  log_text | grep -vE 'Unknown keyword|^\s+at |^\s*\.\.\. [0-9]+ more|^$|Fetching project|ConnectException|UnresolvedAddress|Error: null' | tail -16 | cut -c1-520 | sed 's/^/      /' >&2
   return 1
 }
 
@@ -211,7 +211,41 @@ section_wait() {
   check "no conversation was made for the missing one" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-w2'")"
 }
 
-ALL_SECTIONS="base receive first order wait"
+fake_fail() { curl -s -o /dev/null -X POST http://localhost:8098/__fail -H 'Content-Type: application/json' --data "$1"; }
+
+section_reconcile() {
+  echo "== reconcile: an item Foundry kept but we never recorded is adopted, not sent twice"
+  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (needs the fake Foundry's 'drop' fault: skipped with FOUNDRY_MODE=real)"; return 0; fi
+  store_message ts-c1 1 appUser "m1"; store_message ts-c1 2 appMaker "m2"; store_message ts-c1 3 appUser "m3"
+  printf '%s\n' $'ts-c1\t1\tUserMessageSent\tm1' | publish
+  wait_until "the first message synced" 60 '[ "$(synced ts-c1 1)" -ge 1 ]'
+  echo "   -- the next add is applied by Foundry, but its answer never arrives (the crash window)"
+  fake_fail '{"mode":"drop","count":1,"method":"POST"}'
+  printf '%s\n' $'ts-c1\t2\tAgentMessageSent\tm2\tagent' | publish
+  wait_until "the message recorded after the retry" 60 '[ "$(synced ts-c1 2)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-c1)/items?order=asc&limit=100"
+  check "Foundry holds each message once" "m1,m2" "$(texts)"
+  check "the item map has both rows" 2 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-c1'")"
+  check "the retry found the item and adopted it" 1 "$(log_count 'Message adopted conversation=ts-c1 sequence=2')"
+  check "the map holds Foundry's own item id" "$(echo "${BODY}" | jq -r '.data[1].id')" "$(sql "SELECT foundry_item_id FROM camel_history.foundry_item_map WHERE conversation_id='ts-c1' AND sequence=2")"
+  check "last synced sequence moved to 2" 2 "$(sql "SELECT last_synced_sequence FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-c1'")"
+  printf '%s\n' $'ts-c1\t3\tUserMessageSent\tm3' | publish
+  wait_until "the next message after it" 60 '[ "$(synced ts-c1 3)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-c1)/items?order=asc&limit=100"
+  check "and the conversation goes on in order" "m1,m2,m3" "$(texts)"
+  echo "   -- two applied-but-lost adds in a row, for messages 2 and 3 of another conversation"
+  store_message ts-c2 1 appUser "a1"; store_message ts-c2 2 appMaker "a2"; store_message ts-c2 3 appUser "a3"
+  printf '%s\n' $'ts-c2\t1\tUserMessageSent\ta1' | publish
+  wait_until "ts-c2 created" 60 '[ "$(synced ts-c2 1)" -ge 1 ]'
+  fake_fail '{"mode":"drop","count":2,"method":"POST"}'
+  printf '%s\n' $'ts-c2\t2\tAgentMessageSent\ta2\tagent' $'ts-c2\t3\tUserMessageSent\ta3' | publish
+  wait_until "both recorded" 90 '[ "$(( $(synced ts-c2 2) + $(synced ts-c2 3) ))" -ge 2 ]'
+  fx "/openai/v1/conversations/$(fid ts-c2)/items?order=asc&limit=100"
+  check "still each message once, in order" "a1,a2,a3" "$(texts)"
+  check "three rows in the item map" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-c2'")"
+}
+
+ALL_SECTIONS="base receive first order wait reconcile"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then

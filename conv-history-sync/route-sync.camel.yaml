@@ -72,13 +72,13 @@
                         steps:
                           - bean:
                               id: createFoundryConversation
-                              description: 2.5.1 Create it in Foundry
+                              description: 2.5.1.1 Create it in Foundry
                               note: "One call with the first message and the metadata, then one to read the item id back. Docs: conv-history-sync.md > Routes."
                               ref: foundry
                               method: createConversation
                           - to:
                               id: saveBothMaps
-                              description: 2.5.2 Save both maps
+                              description: 2.5.1.2 Save both maps
                               note: "One statement, so the two rows exist together or not at all. Docs: conv-history-sync.md > Routes."
                               uri: sql
                               parameters:
@@ -95,47 +95,12 @@
                       id: otherwiseAppend
                       description: Known conversation
                       steps:
-                        - bean:
-                            id: appendFoundryItem
-                            description: 2.5.3 Add it in Foundry
-                            note: "One call. A 404 means Foundry no longer has the conversation. Docs: conv-history-sync.md > Routes."
-                            ref: foundry
-                            method: appendItem
-                        - choice:
-                            id: whetherGone
-                            description: 2.5.4 Is the conversation gone?
-                            when:
-                              - id: whenGone
-                                description: Gone from Foundry
-                                expression:
-                                  simple:
-                                    expression: "${header.foundryGone} == true"
-                                steps:
-                                  - throwException:
-                                      id: goneNotHandledYet
-                                      description: 2.5.4.1 Not handled yet
-                                      exceptionType: java.lang.IllegalStateException
-                                      message: "Foundry no longer has conversation ${header.conversationId}"
-                            otherwise:
-                              id: otherwiseSaveItem
-                              description: Still there
-                              steps:
-                                - to:
-                                    id: saveItemMap
-                                    description: 2.5.5 Save the item map
-                                    note: "One statement: the item row and the conversation's last synced sequence. Docs: conv-history-sync.md > Routes."
-                                    uri: sql
-                                    parameters:
-                                      dataSource: "#pgDataSource"
-                                      query: >-
-                                        WITH item AS (
-                                          INSERT INTO foundry_item_map (conversation_id, sequence, foundry_item_id)
-                                          VALUES (CAST(:#conversationId AS varchar), CAST(:#sequence AS int), CAST(:#foundryItemId AS text))
-                                          RETURNING 1
-                                        )
-                                        UPDATE foundry_conversation_map
-                                        SET last_synced_sequence = GREATEST(last_synced_sequence, CAST(:#sequence AS int))
-                                        WHERE conversation_id = CAST(:#conversationId AS varchar)
+                        - to:
+                            id: callAppendRoute
+                            description: 2.5.2 Append (route 4)
+                            uri: direct
+                            parameters:
+                              name: append
                 - log:
                     id: logSynced
                     description: 2.6 Log the message

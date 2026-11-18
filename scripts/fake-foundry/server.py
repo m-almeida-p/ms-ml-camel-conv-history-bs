@@ -7,7 +7,8 @@ items per request, `after`/`before` relative to the listing order, 404 after a d
 bad token. State is in memory.
 
 Faults (control calls, not part of the real API):
-    POST /__fail   {"mode": "429"|"500"|"400"|"401"|"slow"|"drop", "count": N (default 1; -1 = until reset), "delayMs": N}
+    POST /__fail   {"mode": "429"|"500"|"400"|"401"|"slow"|"drop", "count": N (default 1; -1 = until reset), "delayMs": N,
+                    "method": "GET"|"POST"|"DELETE" (optional: only requests with that method are affected and counted)}
         429/500/400/401  answer that error instead of serving the request
         slow             sleep delayMs, then serve it normally
         drop             APPLY the request, then close the connection without answering: the caller sees a failure
@@ -28,7 +29,7 @@ PORT = int(os.environ.get("PORT", "8098"))
 MAX_ITEMS = 20
 LOCK = threading.Lock()
 CONVERSATIONS = {}   # id -> {"id", "created_at", "metadata", "items": [item, ...]}
-FAULT = {"mode": None, "count": 0, "delayMs": 0}
+FAULT = {"mode": None, "count": 0, "delayMs": 0, "method": None}
 SEQ = [0]
 ALNUM = string.digits + string.ascii_letters
 
@@ -159,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
         token = auth[7:] if auth.startswith("Bearer ") and len(auth) > 7 else None
         with LOCK:
             mode, delay = FAULT["mode"], FAULT["delayMs"]
-            if mode and FAULT["count"] != 0:
+            if mode and FAULT["count"] != 0 and FAULT["method"] in (None, method):
                 if FAULT["count"] > 0:
                     FAULT["count"] -= 1
                     if FAULT["count"] == 0:
@@ -186,10 +187,10 @@ class Handler(BaseHTTPRequestHandler):
     def _control(self, method, path, body):
         with LOCK:
             if path == "/__fail" and method == "POST":
-                FAULT.update(mode=body.get("mode"), count=int(body.get("count", 1)), delayMs=int(body.get("delayMs", 0)))
+                FAULT.update(mode=body.get("mode"), count=int(body.get("count", 1)), delayMs=int(body.get("delayMs", 0)), method=body.get("method"))
             elif path == "/__reset" and method == "POST":
                 CONVERSATIONS.clear()
-                FAULT.update(mode=None, count=0, delayMs=0)
+                FAULT.update(mode=None, count=0, delayMs=0, method=None)
             elif path != "/__state":
                 return self._respond(404, {"error": "unknown control call"})
             state = {"conversations": len(CONVERSATIONS), "items": {c: len(v["items"]) for c, v in CONVERSATIONS.items()}, "fault": dict(FAULT)}
