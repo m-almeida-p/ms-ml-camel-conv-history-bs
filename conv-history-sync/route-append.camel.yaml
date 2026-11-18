@@ -24,7 +24,7 @@
                 WHERE conversation_id = :#conversationId ORDER BY sequence DESC LIMIT 1
         - to:
             id: findCandidates
-            description: 4.2 Find the messages that come next
+            description: 4.2 Find the next messages
             note: "The stored messages after the last mapped one, in order: what Foundry should hold after that item. Docs: conv-history-sync.md > Reconciliation."
             uri: sql
             parameters:

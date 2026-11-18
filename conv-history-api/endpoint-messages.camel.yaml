@@ -38,7 +38,7 @@
                 WHERE conversation_id = :#${exchangeProperty.conversationId}
         - choice:
             id: whetherMapped
-            description: 1.3 Is it there? (Content-Based Router)
+            description: 1.3 Is it there?
             when:
               - id: whenNotMapped
                 description: Not in Foundry
@@ -65,7 +65,7 @@
                         expression: "${body}"
         - choice:
             id: whetherCursor
-            description: 1.4 Is there a cursor? (Content-Based Router)
+            description: 1.4 Is there a cursor?
             when:
               - id: whenCursor
                 description: A cursor was sent
@@ -87,7 +87,7 @@
                             AND sequence = CAST(:#${exchangeProperty.cursorSequence} AS int)
                   - choice:
                       id: whetherCursorKnown
-                      description: 1.4.2 Is it a message of this conversation?
+                      description: 1.4.2 Is it a message here?
                       when:
                         - id: whenCursorUnknown
                           description: Not a message here

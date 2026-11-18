@@ -327,6 +327,138 @@ seen, push them, then press **Pull** in Karavan.
 
 ---
 
+## The Foundry projects
+
+Problems of `conv-history-sync`, `conv-history-api`, the token broker and their tests. Design and behaviour:
+[design-foundry.md](design-foundry.md), [conv-history-sync.md](conv-history-sync.md), [conv-history-api.md](conv-history-api.md).
+
+### A file with only `rest:` opens as plain code in the Designer, with no Designer button working
+**Cause:** Karavan opens a file in the Designer only when it holds a route. A file that has just `rest` and `restConfiguration` is
+shown as code.
+**Fix:** keep each endpoint's `rest` verb in the same file as its route (`endpoint-*.camel.yaml`). Set the REST engine with
+`camel.rest.component=platform-http` in `application.properties`, not with a `restConfiguration` block.
+
+### The Designer's **REST** tab throws and the editor falls back to code (`Minified React error #31 ... object with keys {uri, parameters}`)
+**Cause:** the REST tab renders a verb's `to` as text and expects a string. The canonical object form
+(`to: {uri: direct, parameters: {name: x}}`) is an object, and React cannot render it.
+**Fix:** in a `rest` verb write `to: direct:health`. Everything outside `rest` stays canonical. Camel then logs one
+`YAML DSL compact notation detected` warning per `endpoint-*` file; that is expected, see
+[the entry about it](#yaml-dsl-compact-notation-detected) and `test-api.sh`, which allows it for those files only.
+
+### `Duplicate to in rest-dsl: direct:...` at start-up
+**Cause:** two REST verbs point at the same `direct:` endpoint.
+**Fix:** one `direct` per verb, and one route behind each.
+
+### Every request with `page[before]`, `page[after]` or `page[size]` is a 500
+**Cause:** the HTTP layer (Vert.x) copies the request's query parameters into message headers, and later copies message headers
+into the response. A header name with square brackets is rejected, so the response fails, an error answer included. The log shows
+`a header name cannot contain some prohibited characters, such as : page[before]`.
+**Fix:** read the query from `CamelHttpQuery` and remove the `page*` headers **before anything can fail**. `ApiRequest` does it at
+once, and `ProblemResponder` does it again.
+
+### An unknown path is an HTML 404 and a wrong method an empty 405
+**Cause:** that is `platform-http`'s own answer. A catch-all route with `matchOnUriPrefix` does not help: it hides every real endpoint.
+**Fix:** `ProblemHandlers.java` registers `router.errorHandler(404, ...)` and `(405, ...)` on the Vert.x router
+(`VertxPlatformHttpRouter.lookup`) once Camel has started, and answers problem+json.
+
+### `no Foundry endpoint`, or `the token broker did not answer`
+**Cause:** a container that Karavan starts reads no `.env`, and project files go to Git, so a secret and the Azure resource name
+cannot be given to it. The projects ask the broker, `foundry-token`, for a token and the endpoint.
+**Fix:** `docker compose up -d foundry-token`, then `./scripts/test-token-broker.sh`. The broker needs the four `FOUNDRY_*` variables
+in `.env` ([foundry-setup.md](foundry-setup.md)). To point a project at another Foundry, set `app.foundry.endpoint`.
+
+### `Foundry answered 401` or `403` over and over in the sync
+**Cause:** the token is refused or the service principal lacks the role. The sync treats it as "cannot answer" and retries, so the
+partition is held on purpose.
+**Fix:** check the role (*Foundry User*, on the project) and that the secret has not expired (it lasts a year):
+`./scripts/test-token-broker.sh` shows whether Foundry accepts the broker's token.
+
+### The sync is stuck on one message and its log shows `Failed delivery ... FoundryUnavailableException`
+**Cause:** Foundry, the broker or the database cannot answer, or Foundry answers 429 or 5xx. By design the step is retried in place,
+forever, the wait doubling from 1 s to 30 s, and the offset does not move.
+**Fix:** find which dependency: the exception message says (`Foundry answered 503 to POST ...`, `the token broker did not answer`,
+`database failure`). When it answers again the sync goes on by itself; nothing is lost or duplicated.
+
+### `DLQ reason=projection-missing`
+**Cause:** the sync waited `app.sync.projectionWaitSeconds` for the history consumer's row and it never came. The consumer may be
+stopped or behind, or it dead-lettered the same record.
+**Fix:** check `conv-history-consumer` and its `DLQ` lines. Once the row exists, replay the record (rewind **only the sync's own
+group**, see the cheatsheet).
+
+### `DLQ reason=foundry-rejected field=http-400`
+**Cause:** Foundry refused the request for good. The line has Foundry's error code and message, and the body of the record.
+**Fix:** read the detail. A 400 on a text over Foundry's limit or on a malformed id would be here; fix the data or the code, then replay.
+
+### The bounded wait lasts a minute, not `projectionWaitSeconds`
+**Cause:** an `onException` rule **inherits the Dead Letter Channel's exponential back-off**, so the 1 s delay doubled each time.
+**Fix:** `useExponentialBackOff: "false"` in that rule.
+
+### A message is in Foundry twice
+**Cause:** an add was applied but its answer was lost, and the retry sent it again. Camel retries **only the step that failed**, so
+if the look-for-it and the send are two steps, the retry skips the look.
+**Fix:** they are one step (`FoundryClient.addItem`). If it ever happens, `./scripts/check-foundry-sync.sh` shows which
+conversation differs; the sync rebuilds it with the next message, or delete it in Foundry and the next message recreates it.
+
+### `unreported exception ...ValidationException; must be caught or declared to be thrown`, at start-up, as a compilation error
+**Cause:** Camel's `ValidationException` is a checked exception.
+**Fix:** declare it (`throws Exception`) on every method that can throw a subclass of it.
+
+### A `SelectOne` of one column is not a Map
+**Cause:** `SELECT foundry_item_id ...` with `outputType: SelectOne` gives the value itself, not a one-entry row. A bean that read it
+as a Map got null, dropped the `after` cursor and compared the whole conversation.
+**Fix:** read it as a `String`. A select of several columns gives a Map keyed by the lower-case column names.
+
+### `throwException` cannot create my project's exception
+**Cause:** a class compiled from the project's Java files cannot be named in YAML.
+**Fix:** a small bean method that throws it (`apiRequest.conversationNotFound`). Same reason each project exception extends a built-in
+class, and the `onException` rules name that class.
+
+### A working value shows up as a response header
+**Cause:** camel-sql binds `:#name` from the body and then from **headers**, so a route that put values in headers sent them to the client.
+**Fix:** put them in exchange properties and bind with `:#${exchangeProperty.name}`.
+
+### The API list does not show a conversation that exists
+**Cause:** only conversations that are in Foundry are listed, and the sync has not sent it yet. Same for a message: it is not served
+until it is in Foundry.
+**Fix:** `SELECT * FROM camel_history.foundry_conversation_map WHERE conversation_id = '...'`. No row: look at the sync's log and lag.
+
+### A conversation is a 503 although it exists
+**Cause:** it is in the map, but Foundry answered 404 (it no longer has it) or cannot answer. The log says which. A lost conversation
+is rebuilt by the sync with the conversation's next message.
+**Fix:** if Foundry is up, `./scripts/check-foundry-sync.sh` shows what it holds; send nothing by hand.
+
+### I rewound my group to the earliest offset and nothing came back
+**Cause:** the topic's retention removed the old events, so "earliest" is not offset 0 and the old records are gone for good. The
+dry run showed non-zero NEW-OFFSETs.
+**Fix:** always run `--dry-run` first and compare. What the topic no longer holds can only be rebuilt from the event store.
+
+### The Foundry project has conversations nobody mapped
+**Cause:** a crash between creating a Foundry conversation and saving its map row (the retry makes another one), or a test that died.
+**Fix:** `./scripts/foundry-cleanup-orphans.sh` lists them; `--delete` removes them after asking.
+
+### Tests: a script waits for something that already happened
+**Cause:** `wait_until "..." 30 test "$(count)" -ge 1` expands `$(count)` once, before the wait starts, so the condition never changes.
+**Fix:** pass the condition as a string that is evaluated every second (`wait_until "..." 30 '[ "$(count)" -ge 1 ]'`). The same trap
+bites any loop that polls with a command substitution in its arguments.
+
+### Tests: a piped answer never reaches the script, or `set -e` stops it silently
+**Cause:** `docker exec -i` keeps the caller's stdin open and swallows what was piped to it (`echo no | script`).
+**Fix:** run `docker exec` without `-i` when the command needs no input.
+
+### Tests: the checker or a Docker command sees an empty folder
+**Cause:** the macOS temp folder is not shared with the Docker VM.
+**Fix:** keep files that a container must read inside the repo (`.devmode-local/`, git-ignored).
+
+### Tests: a conversation registered for cleanup is not cleaned
+**Cause:** the block that registered it ran inside `$( ... )`, a subshell, so the list was lost when it ended.
+**Fix:** redirect to a file instead of capturing, so the block runs in the main shell.
+
+### Tests: two numbers that are equal compare as different
+**Cause:** jq keeps the written form of an unchanged number, so `262.350` and `262.35` differ as text.
+**Fix:** normalise first: `jq 'walk(if type == "number" then . + 0 else . end)'`.
+
+---
+
 ## Reset everything
 
 Remove Karavan and its database. Projects are safe in Git:

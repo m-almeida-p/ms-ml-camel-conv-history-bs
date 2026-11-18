@@ -332,7 +332,6 @@ section_errors() {
 section_broker() {
   echo "== broker: with the token broker down the sync waits, and goes on when it is back"
   if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (skipped with FOUNDRY_MODE=real)"; return 0; fi
-  dlq_mark
   store_message ts-b1 1 appUser "con el broker caido"
   docker stop foundry-token >/dev/null
   # a fresh start: the new container has no cached token and must ask the broker
@@ -346,7 +345,9 @@ section_broker() {
   wait_until "the message synced once the broker is back" 90 '[ "$(synced ts-b1 1)" -ge 1 ]'
   fx "/openai/v1/conversations/$(fid ts-b1)/items?order=asc&limit=100"
   check "it is in Foundry exactly once" "con el broker caido" "$(texts)"
-  check "no dead-letter line" 0 "$(dlq_new)"
+  # The restarted project has a group of its own, so it reads the whole topic again, and dead-letters the poison record of the
+  # receive section once more. What matters is that nothing was dead-lettered for this section's message.
+  check "this message was not dead-lettered" 0 "$(log_text | grep -c 'DLQ reason=.*ts-b1' || true)"
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}-b" >/dev/null 2>&1 || true
 }
 

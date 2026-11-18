@@ -127,6 +127,51 @@ the real service's group.
 Other targets: `--to-earliest`, `--to-latest`, `--to-offset N` with a single
 `--topic name:partition`, `--shift-by -1`.
 
+## Foundry: the sync, the API and their tools
+
+Containers: `conv-history-sync` (port 8084), `conv-history-api` (port 8086), `foundry-token` (the broker, no published port).
+
+```bash
+docker compose up -d foundry-token                            # the token broker
+./scripts/test-token-broker.sh                                # the broker, from a container on the Karavan network
+./scripts/foundry-smoke-test.sh                               # what the Conversations API does (uses az login)
+
+./scripts/check-foundry-sync.sh                               # Foundry against camel_history, item by item (read-only)
+./scripts/oracle-api.sh                                       # the Karavan-run API against SQL on the data, every account
+./scripts/foundry-cleanup-orphans.sh                          # Foundry conversations nobody maps; --delete removes them
+./scripts/test-e2e.sh                                         # a real producer flow through the whole chain (VPN, agent)
+```
+
+Tests (each starts the project on throwaway topics, groups and fixtures, and removes them):
+
+```bash
+./scripts/test-fake-foundry.sh        # the fake Foundry matches the real one; its faults work
+./scripts/test-sync.sh                # 75 checks; also: ./scripts/test-sync.sh reconcile rebuild errors
+./scripts/test-api.sh                 # 273 checks; every response is checked against docs/contract/
+FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same sections on the real Foundry
+./scripts/fake-foundry.sh start|stop|status                     # the fake, on the Karavan network and on localhost:8098
+```
+
+What the sync and the API log:
+
+```bash
+docker logs conv-history-sync 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'Message (synced|duplicate|adopted)|Conversation rebuilt|DLQ reason='
+docker logs conv-history-api  2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'answering (500|503)'
+docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group ms-ml-camel-conv-history-sync
+curl -s localhost:8086/health
+```
+
+The sync's own group is `ms-ml-camel-conv-history-sync`. To replay it, follow [Consumer group offsets](#consumer-group-offsets)
+for that group, never for `ms-ml-conv-history-bs`. **Always `--dry-run` first**: the topic's retention has removed old events, so
+"earliest" may not be offset 0.
+
+Foundry, by hand (needs `az login`; the token is not printed):
+
+```bash
+TOKEN="$(az account get-access-token --resource https://ai.azure.com/ --query accessToken -o tsv)"
+curl -s "$FOUNDRY_PROJECT_ENDPOINT/openai/v1/conversations?limit=5" -H "Authorization: Bearer $TOKEN" | jq '.data[] | {id, metadata}'
+```
+
 ## Git
 
 ```bash

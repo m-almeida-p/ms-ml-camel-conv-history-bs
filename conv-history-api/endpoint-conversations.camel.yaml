@@ -27,7 +27,7 @@
             method: conversations
         - choice:
             id: pickDirection
-            description: 1.2 Find the page (Content-Based Router)
+            description: 1.2 Page (Content-Based Router)
             note: "Three reads of conversation_summaries, joined to the conversations Foundry holds: the newest page, the page before a cursor, the page after it. One more row than the page tells whether more exist. Docs: conv-history-api.md > The conversation list."
             when:
               - id: whenBefore

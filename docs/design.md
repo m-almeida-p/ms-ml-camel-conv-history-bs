@@ -2,7 +2,8 @@
 
 How the history consumer is built, from the big picture down to the steps. Each diagram shows **one level of detail**,
 and the numbers and names are the same in every diagram, in the Karavan Designer and in the logs. Behaviour in words:
-[conv-history-consumer.md](conv-history-consumer.md). Running it: [karavan-setup.md](karavan-setup.md).
+[conv-history-consumer.md](conv-history-consumer.md). Running it: [karavan-setup.md](karavan-setup.md). The Microsoft Foundry side,
+the sync and the API, is in [design-foundry.md](design-foundry.md).
 
 New here? Read Level 1, then the vocabulary. Debugging? Level 2 and the sequence. Changing it? Level 3 and the reading map.
 
