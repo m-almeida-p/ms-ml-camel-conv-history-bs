@@ -29,7 +29,7 @@ summary() {
   [ "${FAILS}" -eq 0 ]
 }
 
-sql() { docker exec -i yape-postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+sql() { docker exec yape-postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }   # no -i: it would swallow the caller's stdin
 
 env_value() { grep -E "^$1=" "${REPO_DIR}/.env" 2>/dev/null | head -1 | cut -d= -f2-; }
 
