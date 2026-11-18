@@ -332,6 +332,15 @@ seen, push them, then press **Pull** in Karavan.
 Problems of `conv-history-sync`, `conv-history-api`, the token broker and their tests. Design and behaviour:
 [design-foundry.md](design-foundry.md), [conv-history-sync.md](conv-history-sync.md), [conv-history-api.md](conv-history-api.md).
 
+### A project's container exits right after it starts: `Failed to start route: route1 (source: openapi-rest-camel.yaml:1)`
+**Cause:** a file that exists only in Karavan. The **OpenAPI** button of a project's toolbar creates `openapi-rest-camel.yaml`
+(pressed by accident, it is easy to miss). Run copies **every file of the project** into the container, and Camel loads a `.yaml` as
+routes, so it tried to turn that file into a REST contract and failed. The container exits with code 1.
+**Fix:** in the project's **Source** tab, delete the file (the dialog names it; it is not in Git, so there is nothing to push). Remove
+the exited container (`docker rm -f <name>`, or **Containers** → Delete), reload the project page, and press the top-right **Run**.
+**Prevent:** before Run, look at the Source tab: a file marked `NEW` that you did not write is the suspect. After a Pull, only files
+that are in Git should be there.
+
 ### A file with only `rest:` opens as plain code in the Designer, with no Designer button working
 **Cause:** Karavan opens a file in the Designer only when it holds a route. A file that has just `rest` and `restConfiguration` is
 shown as code.
