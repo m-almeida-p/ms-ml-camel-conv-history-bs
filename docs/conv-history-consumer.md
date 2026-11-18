@@ -9,21 +9,21 @@ Project folder: [`conv-history-consumer/`](../conv-history-consumer)
 
 ## What it does
 
-```
-Kafka  yape.public.conversation_events          (Debezium: Schema Registry header + JSON, schema id 2)
-  │
-  ▼  routeReceive
-  1. schema id allowed?  ──no──► DLQ
-  2. valid against the registry's JSON Schema for that id?  ──no──► DLQ
-  3. valid against our contract (required fields, ranges, patterns)?  ──no──► DLQ
-  4. project: is it a chat message? text? author?
-  5. ONE SQL statement, ONE transaction ─► camel_history.conversation_inbox
-                                         ─► camel_history.conversation_messages   (chat events only)
-                                         ─► camel_history.conversation_summaries  (a new message with an account)
-  6. commit the offset (only now)
-  ✗ database down / registry down ─► retry forever, offset not committed
-  ✗ anything unexpected ─► 3 retries, then DLQ as reason=unexpected
-```
+It reads records from the events topic and, for each one, writes the event to three tables. A record it cannot store
+goes to the dead-letter log. The diagrams, from the big picture down to the steps, are in [design.md](design.md): start
+with its [context diagram](design.md#level-1-context).
+
+The Designer draws **three routes**, and the numbers below are the same there, in the diagrams and in the notes of
+each step:
+
+| Route | Steps |
+|---|---|
+| **1 Receive** | 1.1 Decode and validate the record (schema id, registry schema, contract, projection) → 1.2 Route by kind of record (a tombstone is skipped, any other record goes to route 2) → 1.3 Commit the offset, only now |
+| **2 Store** | 2.1 Write inbox, message and summary with one statement in one transaction → 2.2 Decide stored, duplicate or conflict → 2.3 Log the outcome |
+| **3 Dead-letter** | 3.1 Name the reason if no rule did → 3.2 Write the record to the dead-letter log → 3.3 Commit the offset |
+
+Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
+forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
 
 The tables live in the schema **`camel_history`** of the cluster's Postgres, apart from the original consumer's
 `public.conversation_*` tables, so both can run and be compared. Their DDL is the migration folder
@@ -34,8 +34,10 @@ The tables live in the schema **`camel_history`** of the cluster's Postgres, apa
 
 | File | Role |
 |---|---|
-| `route-receive.camel.yaml` | The consumer route: Kafka → decode → store → commit. Karavan draws it. |
-| `route-poison-handling.camel.yaml` | The error rules and the dead-letter route (`direct:dlq`). |
+| `route-receive.camel.yaml` | Route 1, Receive: Kafka → decode → route → commit. |
+| `route-store.camel.yaml` | Route 2, Store: the SQL statement, the outcome. Called as `direct:store`. |
+| `route-error-handling.camel.yaml` | The error rules, and route 3, Dead-letter (`direct:deadLetter`). |
+| `PROJECT.md` | The legend, the numbering and the vocabulary, shown with the project in Karavan. |
 | `ConversationEventDecoder.java` | Schema id check, registry schema validation, contract, projection. |
 | `StoreOutcome.java` | Reads the store statement's result: `stored`, `duplicate`, or a conflict. |
 | `OffsetCommit.java` | Commits the offset by hand (auto commit is off). |
@@ -62,6 +64,8 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 | `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=camel_history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
 ## Schema assurance
+
+*Designer: step 1.1 Decode.*
 
 Four layers, in this order. A record that fails any of them is dead-lettered with the reason shown.
 
@@ -99,6 +103,8 @@ An empty or `null` value (a tombstone) is skipped.
 
 ## Projection: what becomes a message
 
+*Designer: step 1.1 Decode.*
+
 | Event | Role | Text | Author |
 |---|---|---|---|
 | `UserMessageSent` | `appUser` | `payload.text` | the account (`id_yape_account`) |
@@ -111,6 +117,8 @@ valid.
 
 ## The store: one statement, one transaction
 
+*Designer: steps 2.1 Write and 2.2 Decide the outcome.*
+
 `route-receive.camel.yaml` runs a single `WITH` statement, so Postgres applies all or nothing:
 
 1. insert the event into `conversation_inbox`, `ON CONFLICT (conversation_id, sequence) DO NOTHING`;
@@ -119,6 +127,8 @@ valid.
 4. return `inserted`, `projected` and `same`, where `same` says whether the inbox row at that position equals this event.
 
 ## What happens to each kind of record
+
+*Designer: steps 1.2 Route, 1.3 Commit, 2.2 Decide the outcome, and the error rules (`errorRules`).*
 
 | Case | What happens | Offset |
 |---|---|---|
@@ -141,6 +151,8 @@ because the line keeps the body, the records can be replayed after the fix.
 
 ## The dead-letter log
 
+*Designer: route 3, steps 3.1 to 3.3.*
+
 One line per poison record, on its own logger, `dlq`, at `ERROR`:
 
 ```
@@ -157,8 +169,8 @@ DLQ reason=field-range field=conversation_id topic=yape.public.conversation_even
 
 > **The body is logged in full.** It holds conversation text and account IDs. That is acceptable with fake data on a
 > local machine, and it makes replay possible. The reference service deliberately logs no content. Before using real
-> data or a shared environment, remove `body=${exchangeProperty.rawText}` from the `logPoison` step in
-> `route-poison-handling.camel.yaml`.
+> data or a shared environment, remove `body=${exchangeProperty.rawText}` from the `logDeadLetter` step in
+> `route-error-handling.camel.yaml`.
 
 Read it:
 
@@ -170,7 +182,7 @@ docker logs conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | u
 
 **Replay** after a fix: rewind the group to the offsets in the lines (see the [cheatsheet](cheatsheet.md#consumer-group-offsets)).
 A log is not a queue: if you need records kept and re-readable independent of container logs, copy them to a Kafka
-topic from `direct:dlq`.
+topic from `direct:deadLetter`.
 
 ### Kafka header names (Camel 4)
 
@@ -198,7 +210,7 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
    is a different button and does not start DevMode: see [troubleshooting](troubleshooting.md#which-button-does-what).) The first run pulls the DevMode image
    (about 1.5 GB) and downloads the dependencies, so allow a few minutes.
 3. Watch it: Karavan's **Log** tab, or `docker logs -f conv-history-consumer`. A healthy start shows
-   `Routes startup (total:2)` (`routeReceive`, `routeDlq`), then the group joins and gets all 12 partitions.
+   `Routes startup (total:3)` (`routeReceive`, `routeStore`, `routeDeadLetter`), then the group joins and gets all 12 partitions.
 4. `docker ps --filter name=conv-history-consumer` says `(healthy)` after about 25 seconds.
 
 ## Change it

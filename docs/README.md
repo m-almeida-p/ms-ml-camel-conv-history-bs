@@ -5,6 +5,7 @@ Guides for the Apache Camel Karavan setup in this repository and for the
 
 | Guide | Read it when |
 |---|---|
+| [design.md](design.md) | You want the picture first: the context, the containers, the three routes and their steps, the vocabulary, the legend and the Camel patterns used. |
 | [karavan-setup.md](karavan-setup.md) | You need to start Karavan, understand how it is wired, or rebuild it from scratch. |
 | [conv-history-consumer.md](conv-history-consumer.md) | You want to know what the Kafka consumer does, how to run it, test it and replay messages. |
 | [troubleshooting.md](troubleshooting.md) | Something failed. Each entry lists the symptom, the cause and the fix. Every entry is a problem we actually hit. |

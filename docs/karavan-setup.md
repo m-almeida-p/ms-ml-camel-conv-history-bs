@@ -134,7 +134,7 @@ When you create a project, Karavan adds template files. For
 | File | Notes |
 |---|---|
 | `application.properties` | Camel settings, dependencies, the datasource. Changed from the template; see the [consumer guide](conv-history-consumer.md#applicationproperties-changes-from-the-template). |
-| `route-receive.camel.yaml`, `route-poison-handling.camel.yaml` | The consumer route, and the error rules with the dead-letter route. |
+| `route-receive.camel.yaml`, `route-store.camel.yaml`, `route-error-handling.camel.yaml` | The three routes: Receive, Store, Dead-letter (with the error rules). |
 | `*.java` | Small Java helpers (decoder, store outcome, offset commit). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
 | `docker-compose.yaml` | Generated for the *Deploy* feature. It uses network `karavan` and host port 8081, which do not match this setup. DevMode does not use it; ignore it unless you use Deploy. |
 | `PROJECT.md` | Empty project notes. |

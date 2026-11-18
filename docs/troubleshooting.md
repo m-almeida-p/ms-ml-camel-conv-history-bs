@@ -174,6 +174,17 @@ properties at first use, not from `camel.beans.*`.
 org.apache.camel.ValidationException`, and the route lists `org.apache.camel.ValidationException`. `ValidationException`
 is a checked exception, so methods that throw it declare `throws PoisonRecordException`.
 
+### Poison records are retried 3 times before they reach the dead-letter log
+**Cause:** with a Dead Letter Channel as the route configuration's error handler, an `onException` rule **inherits the
+handler's redelivery policy** (3 retries) unless it sets its own. A poison record can never succeed, so the retries only
+add delay and `Failed delivery ... attempt 0` warnings. The test suite caught this.
+**Fix:** give the rules for poison and refused records their own policy: `redeliveryPolicy: {maximumRedeliveries: "0"}`.
+
+### `Unsupported field: description` on a `deadLetterChannel`
+**Cause:** the error handler definitions (`deadLetterChannel`, `redeliveryPolicy`) take an `id` but no `description` or
+`note`. Routes, steps, `from` and `onException` do.
+**Fix:** put the explanation in a YAML comment above the handler.
+
 ### `Node should have only have 1 key, was: 4 keys: [id,exception,handled,steps]`
 **Cause:** in a `routeConfiguration`, each entry of `onException` must be wrapped as its own `- onException:` node.
 **Fix:** `onException:` → `- onException:` → `id`, `exception`, `handled`, `steps` indented under it.
