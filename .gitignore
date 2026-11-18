@@ -6,3 +6,6 @@ logs_*.txt
 
 .idea/
 .DS_Store
+
+# Local DevMode runner working copies (scripts/devmode-local.sh)
+.devmode-local/
