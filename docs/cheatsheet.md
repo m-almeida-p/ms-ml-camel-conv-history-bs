@@ -64,7 +64,7 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
 ```bash
 ./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
 ./scripts/devmode-local.sh stop conv-history-consumer
-./scripts/test-consumer.sh        # 35 checks on a throwaway topic (about 1.5 min)
+./scripts/test-consumer.sh        # 37 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
 ./scripts/parity-check.sh         # the 96 real events vs the original consumer's tables (about 25 s)
 ```
 
@@ -146,8 +146,10 @@ Tests (each starts the project on throwaway topics, groups and fixtures, and rem
 
 ```bash
 ./scripts/test-fake-foundry.sh        # the fake Foundry matches the real one; its faults work
-./scripts/test-sync.sh                # 75 checks; also: ./scripts/test-sync.sh reconcile rebuild errors
+./scripts/test-sync.sh                # 120 checks (fake Foundry); also: ./scripts/test-sync.sh reconcile rebuild edge errors
 ./scripts/test-api.sh                 # 273 checks; every response is checked against docs/contract/
+./scripts/test-camel.sh               # 373 JUnit tests in a Maven container (api 246, consumer 81, sync 46); one module: ./scripts/test-camel.sh api ApiRoutesTest
+./scripts/test-all.sh                 # every suite, then one table (about 15 min); --offline skips the real Foundry, --e2e adds the real producer flow
 FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same sections on the real Foundry
 ./scripts/fake-foundry.sh start|stop|status                     # the fake, on the Karavan network and on localhost:8098
 ```

@@ -58,7 +58,7 @@ The secret expires in a year. To remove the identity: `az ad sp delete --id <app
 
 ```bash
 docker compose up -d foundry-token          # the broker
-./scripts/test-token-broker.sh              # 15 checks: a token Foundry accepts, the cache, no secret in logs or files
+./scripts/test-token-broker.sh              # 16 checks: a token Foundry accepts, the cache, no secret in logs or files
 ./scripts/foundry-smoke-test.sh             # what the Conversations API accepts and returns (uses `az login`)
 ```
 
@@ -76,9 +76,11 @@ curl -s localhost:8086/health                                             # {"st
 | Script | What it proves | Needs |
 |---|---|---|
 | `test-token-broker.sh` | The broker | Cluster |
-| `test-fake-foundry.sh` | The fake Foundry behaves like the real one (38 observations) | Cluster, Foundry |
+| `test-fake-foundry.sh` | The fake Foundry behaves like the real one (81 checks) | Cluster, Foundry |
 | `test-sync.sh` | The sync: order, repeats, reconciliation, rebuilds, errors, a broker that is down | Cluster; `FOUNDRY_MODE=real` runs some on the real Foundry |
 | `test-api.sh` | The API: validation, list, messages, failures, and every response against the contract | Cluster |
+| `test-camel.sh` | 373 JUnit tests of the projects' own Java and YAML: request validation, the decoder, the reconcile matrix, and the API and the consumer's store as a client or the database sees them | Cluster, fake Foundry |
+| `test-all.sh` | Every suite in turn, one table at the end | Cluster, Foundry |
 | `test-cleanup-orphans.sh` | The orphan cleanup, on the real project | Foundry |
 | `oracle-api.sh` | The API against SQL on the data, for every account | Karavan-run API |
 | `test-e2e.sh` | A real producer flow through the whole chain, timed hop by hop | VPN, agent, the three projects |

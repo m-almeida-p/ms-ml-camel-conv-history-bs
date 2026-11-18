@@ -335,7 +335,8 @@ section_crash() {
   check "the rebuilt conversation holds all three, in order" "r1,r2,r3" "$(texts)"
   check "the item map has three rows" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-k3'")"
   check "the half-built conversation of the dead process is an orphan" 1 "$(orphans_of ts-k3)"
-  check "nothing was dead-lettered through any of this" 0 "$(dlq_new)"
+  # not dlq_new: the container was killed and relaunched, so its log (and the counter taken at the start) began again
+  check "nothing of this section was dead-lettered" 0 "$(log_text | grep -c 'DLQ reason=.*ts-k[123]' || true)"
 }
 
 

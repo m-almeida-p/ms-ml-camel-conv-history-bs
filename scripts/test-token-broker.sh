@@ -22,6 +22,9 @@ command -v jq >/dev/null || { echo "❌  jq is required" >&2; exit 1; }
 
 echo "== start the broker"
 compose up -d foundry-token >/dev/null
+# A broker keeps its token until a minute before it expires, so one that other suites have used for a while would show a shorter life.
+# Restart it, so the token checked below is a fresh one. (The running projects just ask again when their cached token expires.)
+docker restart foundry-token >/dev/null
 for _ in $(seq 1 30); do
   [ "$(docker inspect -f '{{.State.Health.Status}}' foundry-token 2>/dev/null)" = healthy ] && break
   sleep 2

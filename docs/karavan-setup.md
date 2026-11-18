@@ -123,7 +123,7 @@ Development aids (they do not use Karavan; see the [consumer guide](conv-history
 | Script | Effect |
 |---|---|
 | `./scripts/devmode-local.sh <project> [NAME=value ...]` | Run a project folder of this repo in the DevMode image, on the cluster network. `stop <project>` removes it. |
-| `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (35 checks). |
+| `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (37 checks). |
 | `./scripts/parity-check.sh` | Compare what the consumer wrote with the original consumer's tables. |
 
 ## Files Karavan generates in a project

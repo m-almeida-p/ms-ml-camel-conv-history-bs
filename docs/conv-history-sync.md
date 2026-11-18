@@ -143,7 +143,7 @@ The log says why, at `WARN`: `Rebuilding conversation=… reason=…` and `Conve
 ## Test it
 
 ```bash
-./scripts/test-sync.sh                  # 75 checks: receive, first, order, wait, reconcile, rebuild, errors, broker
+./scripts/test-sync.sh                  # 120 checks: receive, first, order, wait, reconcile, rebuild, edge, errors, broker, crash
 ./scripts/test-sync.sh reconcile        # one section
 FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same on the real Foundry
 ./scripts/check-foundry-sync.sh         # Foundry against camel_history, item by item (read-only)

@@ -235,7 +235,8 @@ Two scripts, both against the local cluster, both on **throwaway topics** and gr
 
 | Script | What it proves | Time |
 |---|---|---|
-| `./scripts/test-consumer.sh` | 35 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 17 poison cases, each with its exact reason; a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
+| `./scripts/test-consumer.sh` | 37 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
+| `./scripts/test-camel.sh consumer` | 81 JUnit tests: the decoder at the edges of every field (66, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
 | `./scripts/parity-check.sh` | Replays the 96 rows of `public.conversation_events` as Debezium would, and compares the three `camel_history` tables with the original consumer's `public` tables, every column, both directions. | about 25 s |
 
 Both truncate the `camel_history` tables. They never write to the real topic or to the `public` tables.
@@ -259,6 +260,8 @@ do first.
   reported as `store-rejected`. It needs two concurrent consumers; with one group member it cannot happen.
 - **No rebuild command.** The original can replay its inbox into messages and summaries (`consumer rebuild`). That is
   not ported. It would be a single `INSERT ... SELECT` from `conversation_inbox`.
+- **A lone surrogate becomes `?`.** A text with half of an emoji (`\uD800`) cannot be UTF-8; the JDBC driver stores `?` in its place and the stream goes on.
+- **Lowercase `t` and `z` in `occurred_at` are accepted** (RFC 3339 allows them; Java parses them). The original's Go parser refuses them. No producer writes them.
 - **The DLQ is a log.** It lives as long as the container's logs do.
 - **The registry schema is read at the first record,** not at startup. An unreachable registry shows as `WARN` retries
   on the first record, not as a failed start.
