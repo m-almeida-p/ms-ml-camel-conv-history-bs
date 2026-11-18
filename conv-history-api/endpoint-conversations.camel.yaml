@@ -59,7 +59,7 @@
                 steps:
                   - to:
                       id: findPageAfter
-                      description: 1.2.2 More recent than the cursor
+                      description: 1.2.2 More recent than cursor
                       uri: sql
                       parameters:
                         dataSource: "#pgDataSource"

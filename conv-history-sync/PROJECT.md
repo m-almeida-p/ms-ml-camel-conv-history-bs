@@ -10,8 +10,8 @@ Everything below is explained, with diagrams, in [`docs/design-foundry.md`](../d
 
 | Route | Steps |
 |---|---|
-| **1 Receive** | 1.1 Decode, 1.2 Route, 1.3 Commit offset |
-| **2 Sync** | 2.1 Read the stored message, 2.2 Look up the item map, 2.3 Repeat?, 2.4 Look up the conversation map, 2.5 New or known conversation, 2.6 Log |
+| **1 Receive** | 1.1 Decode, 1.2 Route, 1.3 Commit |
+| **2 Sync** | 2.1 Read the stored message, 2.2 Look up the item map, 2.3 Repeat, 2.4 Look up the conversation map, 2.5 New or known conversation, 2.6 Log |
 | **3 Dead-letter** | 3.1 Name the reason, 3.2 Write the log, 3.3 Commit |
 | **4 Append** | 4.1 Find the last mapped item, 4.2 Find the next messages, 4.3 Add or adopt, 4.4 Rebuild or record, 4.5 Record, 4.6 Note an adoption |
 | **5 Rebuild** | 5.1 Log the reason, 5.2 Find the stored messages, 5.3 Build it again in Foundry, 5.4 Replace the maps, 5.5 Log |

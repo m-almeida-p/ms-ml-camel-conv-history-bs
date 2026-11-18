@@ -222,7 +222,7 @@ The idempotency is the database key `(conversation_id, sequence)`, not Camel's `
 
 - **One route, one purpose, one level;** routes call each other through `direct:`.
 - **An `id` on every route and step, a short `description`, the reason in `note`.** The Designer shows the description as
-  the label (cut at about 33 characters), so it says *what*; the note says *why* and ends with a **Docs:** pointer.
+  the label (cut at 32 characters, then `...`), so it says *what*; the note says *why* and ends with a **Docs:** pointer.
 - **Canonical YAML DSL**, not the compact shorthand (Camel warns: `YAML DSL compact notation detected`).
 - **Configuration outside the routes**, overridable from the environment: `{{app.topic}}`, `APP_TOPIC`.
 - **Error handling apart from the routes**, in a named `routeConfiguration` (`errorRules`) that each route references.

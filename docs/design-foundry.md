@@ -100,7 +100,7 @@ flowchart LR
     r2["2 Sync"]
     r4["4 Append"]
     r5["5 Rebuild"]
-    r13["1.3 Commit offset (at-least-once)"]
+    r13["1.3 Commit (at-least-once)"]
     r3["3 Dead-letter"]
 
     topic -- "record" --> r11
@@ -142,7 +142,7 @@ in place, forever, and the offset does not move.
 flowchart TB
     s21["2.1 Read the stored message<br/>waits for the history consumer's row"]
     s22["2.2 Look up the item map"]
-    s23{"2.3 Repeat? (Idempotent Consumer)"}
+    s23{"2.3 Repeat (Idempotent Consumer)"}
     dup["2.3.1 Log the repeat"]
     s24["2.4 Look up the conversation map"]
     s25{"2.5 New or known conversation"}
@@ -332,4 +332,4 @@ sequenceDiagram
   class cannot be named in YAML.
 - Settings are `app.*` in `application.properties`, overridable by environment variables; no secret and no Azure resource name
   in a project file.
-- Every route and step has a number, a short label (33 characters at most) and, when it needs one, a note ending in `Docs:`.
+- Every route and step has a number, a short label (32 characters at most: the Designer draws 32, then `...`) and, when it needs one, a note ending in `Docs:`.

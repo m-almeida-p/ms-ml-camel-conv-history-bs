@@ -31,7 +31,7 @@
                 WHERE conversation_id = :#conversationId AND sequence = :#sequence
         - choice:
             id: skipRepeat
-            description: 2.3 Repeat? (Idempotent Consumer)
+            description: 2.3 Repeat (Idempotent Consumer)
             note: "A message already in the item map is not sent again. Docs: conv-history-sync.md > Routes."
             when:
               - id: whenAlreadySynced

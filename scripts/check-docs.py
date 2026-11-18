@@ -5,7 +5,7 @@
 
   1. every `Docs: <file> > <Section>` in a note of a Karavan project points to a file in docs/ and to a heading in it;
   2. every Markdown link in README.md, docs/ and the PROJECT.md files resolves: the file exists and so does the #anchor;
-  3. every route and step label that starts with a number is at most 33 characters (the Designer truncates longer ones);
+  3. every route and step label that starts with a number is at most 32 characters (the Designer draws 32 and then `...`, measured by opening every route);
   4. every mermaid diagram renders (needs mmdc; skipped with --no-mermaid or when it is not installed).
 """
 import re
@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECTS = ["conv-history-consumer", "conv-history-sync", "conv-history-api"]
-MAX_LABEL = 33
+MAX_LABEL = 32
 failures = []
 
 

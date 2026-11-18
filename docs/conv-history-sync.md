@@ -12,10 +12,10 @@ Five routes, read in order. The numbers are the same in the Designer, in the dia
 |---|---|---|
 | **1 Receive** | 1.1 Decode | The consumer's decoder: schema id, registry schema, contract, projection. A bad record goes to route 3. |
 | | 1.2 Route | A tombstone (1.2.1) and an event that is not a chat message (1.2.3) are skipped; a chat message goes to route 2 (1.2.2). |
-| | 1.3 Commit offset | The offset moves only now, so a crash replays the record and every step is safe to repeat. |
+| | 1.3 Commit | The offset moves only now, so a crash replays the record and every step is safe to repeat. |
 | **2 Sync** | 2.1 Read the stored message | `SyncStore.loadMessage`: the role and the text come from `conversation_messages`, not from the event. It waits for the history consumer's row. |
 | | 2.2 Look up the item map | A row for `(conversation_id, sequence)` proves the message was sent: the inbox of this project. |
-| | 2.3 Repeat? | In the map: logged as a repeat, nothing is sent. |
+| | 2.3 Repeat | In the map: logged as a repeat, nothing is sent. |
 | | 2.4 Look up the conversation map | Is there a Foundry conversation for it? |
 | | 2.5 New or known | New: 2.5.1.1 create it in Foundry with the first message and our id in its metadata, 2.5.1.2 save both map rows in one statement. Known: 2.5.2 route 4. |
 | | 2.6 Log the message | `Message synced conversation=… sequence=… foundryConversation=… item=…` |

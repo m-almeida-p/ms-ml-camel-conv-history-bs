@@ -62,7 +62,7 @@
                     message: "Not a chat message, skipped event=${body[eventName]} conversation=${header.conversationId} sequence=${header.sequence}"
         - bean:
             id: commitOffset
-            description: 1.3 Commit offset (at-least-once)
+            description: 1.3 Commit (at-least-once)
             note: "The offset moves only now. After a crash the record comes back and route 2 ignores the repeat. Docs: conv-history-sync.md > Routes."
             ref: offsetCommit
             method: commit
