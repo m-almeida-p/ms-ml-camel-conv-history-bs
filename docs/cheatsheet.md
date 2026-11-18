@@ -39,7 +39,7 @@ docker exec conv-history-consumer curl -s -o /dev/null -w '%{http_code}\n' http:
 docker exec conv-history-consumer curl -s http://localhost:8080/observe/health
 ```
 
-Applying a change = Karavan **Containers** tab → **Stop** → **Delete** (confirm), then **Run at the top right of the
+Applying a change = Karavan **Containers** tab → **Stop** → **Delete** (each asks you to confirm), then **Run at the top right of the
 page** (not the Run of the Containers tab; see [which button does what](troubleshooting.md#which-button-does-what)).
 
 ### Dead-letter log and results

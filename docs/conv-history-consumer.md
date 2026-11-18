@@ -218,7 +218,7 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
 Karavan stores the files in its database, and DevMode copies them into the container when it is created.
 
 1. Change the files in Karavan, or in this repo and then **Push** and **Pull** (see [setup](karavan-setup.md#how-karavan-and-git-work-together)).
-2. **Containers** tab → **Stop** → **Delete** (confirm), then **Run at the top right of the page**. Do not use
+2. **Containers** tab → **Stop** → **Delete** (each asks you to confirm), then **Run at the top right of the page**. Do not use
    the Run of the Containers tab for this: it is for built images, and a stopped container keeps its old files.
 
 For quick iterations without Karavan, run the same image against the files in this repo:

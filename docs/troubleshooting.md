@@ -56,6 +56,10 @@ Keep the tag equal to the Karavan version. Recreate Karavan:
 state is in the Postgres volume.
 Verify an image exists before using it: `docker manifest inspect ghcr.io/apache/camel-karavan-devmode:<tag>`.
 
+### I clicked Stop, Delete or Run and nothing happened
+**Cause:** the buttons of the **Containers** tab (Stop, Delete, Run) each open a confirmation dialog, "Confirm stop container?", "Confirm delete container?" or "Confirm run container?", and do nothing until you click **Confirm**. The dialog is easy to miss; the container is unchanged in `docker ps` until you confirm. The square Stop and the top-right Run of the page header do not ask.
+**Fix:** look for the dialog and click **Confirm**.
+
 ### I clicked Run, a "Confirm run container?" dialog appeared, I confirmed, and nothing started
 **Cause:** the page has **two different Run buttons**, and the one in the **Containers** tab is not the one that starts a
 project. It runs an *image you built* (Build/Deploy) and asks for confirmation, and with no built image it does nothing:
@@ -236,7 +240,7 @@ Most of the time lost while building this went to the UI, not to Camel. This sec
 | Top right of the page | **Stop** (square) and **trash** | Stop, and delete, the running DevMode container. |
 | Top right of the page | **Reload** | Appears while the project runs. We did not use or test it: apply changes with Stop, Delete and Run. |
 | **Containers** tab | **Run** | Asks "Confirm run container?" and runs an *image you built*; with a stopped container present it is expected to restart that container as it is (not tested). **Not** the way to start DevMode. |
-| **Containers** tab | **Stop** / **Delete** | Stop the container / remove it (asks "Confirm delete container?"). Deleting removes only the container, never the project. |
+| **Containers** tab | **Stop** / **Delete** | Stop the container / remove it. **Each opens a confirmation dialog** ("Confirm stop container?", "Confirm delete container?") and does nothing until you click **Confirm**. Deleting removes only the container, never the project. |
 | **Containers** tab | **Deploy** | Builds and deploys an image. Not used here. |
 | **Source** tab | **Pull** | Replaces the project's files with Git's. Warns that it rewrites everything not committed. |
 | **Source** tab | **Push** | Commits and pushes the ticked files. Disabled until a file is ticked. |
