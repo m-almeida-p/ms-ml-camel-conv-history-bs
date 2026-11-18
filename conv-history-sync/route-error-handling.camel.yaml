@@ -82,6 +82,54 @@
                 parameters:
                   name: deadLetter
 
+      # The history consumer has not written the message row yet. The two projects read the same topic at the same
+      # time, so this one can be first. The wait is bounded: if the row never comes (the consumer dead-lettered the
+      # record), the record is dead-lettered here too, instead of holding the partition for good.
+      - onException:
+          id: onProjectionPending
+          description: Message not stored yet (wait)
+          note: "Waits app.sync.projectionWaitSeconds for the history consumer's row, then dead-letters. Docs: conv-history-sync.md > Error handling."
+          exception:
+            - java.sql.SQLTransientException
+          redeliveryPolicy:
+            maximumRedeliveries: "{{app.sync.projectionWaitSeconds}}"
+            redeliveryDelay: "1000"
+            # The Dead Letter Channel's exponential back-off is inherited unless it is switched off: the wait would
+            # double each second (1, 2, 4, 8...) and last a minute instead of projectionWaitSeconds.
+            useExponentialBackOff: "false"
+            logRetryAttempted: "true"
+            retryAttemptedLogLevel: INFO
+            logStackTrace: "false"
+            logExhausted: "true"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - setProperty:
+                id: pendingReason
+                name: dlqReason
+                expression:
+                  constant:
+                    expression: projection-missing
+            - setProperty:
+                id: pendingField
+                name: dlqField
+                expression:
+                  constant:
+                    expression: conversation_messages
+            - setProperty:
+                id: pendingDetail
+                name: dlqDetail
+                expression:
+                  constant:
+                    expression: the history consumer did not store this message in time
+            - to:
+                id: pendingToDeadLetter
+                description: To route 3
+                uri: direct
+                parameters:
+                  name: deadLetter
+
       # Known transient failures: the database is unreachable or times out, or the schema registry cannot be reached.
       # The record itself is fine, so it is never dead-lettered for this. It is retried in place, forever, the wait
       # doubling from 1 s to 30 s, and its offset does not move until it works (as ms-ml-conv-history-bs does).

@@ -1,7 +1,7 @@
 - route:
     id: routeSync
     description: 2 Sync
-    note: "One chat message to Foundry. Called by step 1.2.2. Docs: conv-history-sync.md > Routes."
+    note: "One chat message to Foundry, once. Called by step 1.2.2. Docs: conv-history-sync.md > Routes."
     nodePrefixId: routeSync
     routeConfigurationId: errorRules
     from:
@@ -11,7 +11,132 @@
       parameters:
         name: sync
       steps:
-        - log:
-            id: logChatMessage
-            description: 2.1 Log the chat message
-            message: "Chat message conversation=${header.conversationId} sequence=${header.sequence}"
+        - bean:
+            id: loadStoredMessage
+            description: 2.1 Read the stored message
+            note: "Role and text come from conversation_messages, not from the event, so Foundry holds the very text our table holds. It waits for the history consumer's row. Docs: conv-history-sync.md > Routes."
+            ref: syncStore
+            method: loadMessage
+        - to:
+            id: findItemMap
+            description: 2.2 Look up the item map
+            note: "The inbox of this project: a row here proves the message was sent. Docs: conv-history-sync.md > Routes."
+            uri: sql
+            parameters:
+              dataSource: "#pgDataSource"
+              outputType: SelectOne
+              outputHeader: itemMapRow
+              query: >-
+                SELECT foundry_item_id FROM foundry_item_map
+                WHERE conversation_id = :#conversationId AND sequence = :#sequence
+        - choice:
+            id: skipRepeat
+            description: 2.3 Skip a repeat (Idempotent Consumer)
+            note: "A message already in the item map is not sent again. Docs: conv-history-sync.md > Routes."
+            when:
+              - id: whenAlreadySynced
+                description: Already synced
+                expression:
+                  simple:
+                    expression: "${header.itemMapRow} != null"
+                steps:
+                  - log:
+                      id: logDuplicate
+                      description: 2.3.1 Log the repeat
+                      message: "Message duplicate conversation=${header.conversationId} sequence=${header.sequence}"
+            otherwise:
+              id: otherwiseSend
+              description: Not synced yet
+              steps:
+                - to:
+                    id: findConversationMap
+                    description: 2.4 Look up the conversation map
+                    uri: sql
+                    parameters:
+                      dataSource: "#pgDataSource"
+                      outputType: SelectOne
+                      outputHeader: convMapRow
+                      query: >-
+                        SELECT foundry_conversation_id, last_synced_sequence FROM foundry_conversation_map
+                        WHERE conversation_id = :#conversationId
+                - choice:
+                    id: newOrKnownConversation
+                    description: 2.5 New or known conversation
+                    note: "The first message creates the Foundry conversation; the others add to it. Docs: conv-history-sync.md > Routes."
+                    when:
+                      - id: whenNewConversation
+                        description: New conversation
+                        expression:
+                          simple:
+                            expression: "${header.convMapRow} == null"
+                        steps:
+                          - bean:
+                              id: createFoundryConversation
+                              description: 2.5.1 Create it in Foundry
+                              note: "One call with the first message and the metadata, then one to read the item id back. Docs: conv-history-sync.md > Routes."
+                              ref: foundry
+                              method: createConversation
+                          - to:
+                              id: saveBothMaps
+                              description: 2.5.2 Save both maps
+                              note: "One statement, so the two rows exist together or not at all. Docs: conv-history-sync.md > Routes."
+                              uri: sql
+                              parameters:
+                                dataSource: "#pgDataSource"
+                                query: >-
+                                  WITH conv AS (
+                                    INSERT INTO foundry_conversation_map (conversation_id, foundry_conversation_id, last_synced_sequence)
+                                    VALUES (CAST(:#conversationId AS varchar), CAST(:#foundryConversationId AS text), CAST(:#sequence AS int))
+                                    RETURNING conversation_id
+                                  )
+                                  INSERT INTO foundry_item_map (conversation_id, sequence, foundry_item_id)
+                                  SELECT conversation_id, CAST(:#sequence AS int), CAST(:#foundryItemId AS text) FROM conv
+                    otherwise:
+                      id: otherwiseAppend
+                      description: Known conversation
+                      steps:
+                        - bean:
+                            id: appendFoundryItem
+                            description: 2.5.3 Add it in Foundry
+                            note: "One call. A 404 means Foundry no longer has the conversation. Docs: conv-history-sync.md > Routes."
+                            ref: foundry
+                            method: appendItem
+                        - choice:
+                            id: whetherGone
+                            description: 2.5.4 Is the conversation gone?
+                            when:
+                              - id: whenGone
+                                description: Gone from Foundry
+                                expression:
+                                  simple:
+                                    expression: "${header.foundryGone} == true"
+                                steps:
+                                  - throwException:
+                                      id: goneNotHandledYet
+                                      description: 2.5.4.1 Not handled yet
+                                      exceptionType: java.lang.IllegalStateException
+                                      message: "Foundry no longer has conversation ${header.conversationId}"
+                            otherwise:
+                              id: otherwiseSaveItem
+                              description: Still there
+                              steps:
+                                - to:
+                                    id: saveItemMap
+                                    description: 2.5.5 Save the item map
+                                    note: "One statement: the item row and the conversation's last synced sequence. Docs: conv-history-sync.md > Routes."
+                                    uri: sql
+                                    parameters:
+                                      dataSource: "#pgDataSource"
+                                      query: >-
+                                        WITH item AS (
+                                          INSERT INTO foundry_item_map (conversation_id, sequence, foundry_item_id)
+                                          VALUES (CAST(:#conversationId AS varchar), CAST(:#sequence AS int), CAST(:#foundryItemId AS text))
+                                          RETURNING 1
+                                        )
+                                        UPDATE foundry_conversation_map
+                                        SET last_synced_sequence = GREATEST(last_synced_sequence, CAST(:#sequence AS int))
+                                        WHERE conversation_id = CAST(:#conversationId AS varchar)
+                - log:
+                    id: logSynced
+                    description: 2.6 Log the message
+                    message: "Message synced conversation=${header.conversationId} sequence=${header.sequence} foundryConversation=${header.foundryConversationId} item=${header.foundryItemId}"

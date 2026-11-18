@@ -58,14 +58,19 @@ store_message() { # conversation_id sequence role text   (stands in for the hist
        ON CONFLICT (conversation_id, sequence) DO NOTHING" >/dev/null
 }
 
-wait_until() { # description, timeout in seconds, command...
-  local what="$1" limit="$2"; shift 2
-  for _ in $(seq 1 "${limit}"); do "$@" && return 0; sleep 1; done
+wait_until() { # description, timeout in seconds, a shell expression that is true when done. It is evaluated again every second.
+  local what="$1" limit="$2" condition="$3"
+  for _ in $(seq 1 "${limit}"); do eval "${condition}" && return 0; sleep 1; done
   fail "timed out waiting for: ${what}"
   echo "    last relevant log lines:" >&2
-  log_text | grep -E ' (ERROR|WARN) |Chat message|Not a chat|DLQ|Tombstone|Exception' | tail -12 | cut -c1-260 | sed 's/^/      /' >&2
+  log_text | grep -vE 'Unknown keyword|^\s+at |^\s*\.\.\. [0-9]+ more|^$|Fetching project|ConnectException|UnresolvedAddress|Error: null' | tail -16 | cut -c1-240 | sed 's/^/      /' >&2
   return 1
 }
+
+DLQ_MARK=0
+dlq_mark() { DLQ_MARK="$(log_count 'DLQ reason=')"; }
+dlq_new() { echo "$(( $(log_count 'DLQ reason=') - DLQ_MARK ))"; }
+synced() { log_count "Message synced conversation=$1 sequence=$2 "; }
 
 group_lag() { # total lag of the throwaway group, 0 when everything is committed
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group "${GROUP}" 2>/dev/null \
@@ -107,6 +112,10 @@ section_base() {
 
 section_receive() {
   echo "== receive: chat messages go to route 2, the rest is skipped, poison goes to the dead-letter log"
+  dlq_mark
+  store_message ts-r1 1 appUser "hola"
+  store_message ts-r1 2 appMaker "hola, en que te ayudo"
+  store_message ts-r1 3 appMaker "no puedo ayudarte con eso"
   printf '%s\n' \
     $'ts-r1\t1\tUserMessageSent\thola' \
     $'ts-r1\t2\tAgentMessageSent\thola, en que te ayudo\tagent' \
@@ -115,17 +124,94 @@ section_receive() {
     $'ts-r1\t5\tToolActionSummarized\tpay\tagent' \
     $'RAW\tts-r1\tnot json at all' \
     $'TOMBSTONE\tts-r1' | publish
-  wait_until "the 7 records handled" 90 test "$(( $(log_count 'Chat message conversation=') + $(log_count 'Not a chat message') + $(log_count 'DLQ reason=') + $(log_count 'Tombstone skipped') ))" -ge 7
+  wait_until "the 7 records handled" 90 '[ "$(( $(log_count "Message synced conversation=ts-r1 ") + $(log_count "Not a chat message") + $(dlq_new) + $(log_count "Tombstone skipped") ))" -ge 7 ]'
   sleep 3
-  check "3 chat messages reach route 2" 3 "$(log_count 'Chat message conversation=ts-r1 sequence=[123]$')"
+  check "3 chat messages reach route 2 and are synced" 3 "$(log_count 'Message synced conversation=ts-r1 sequence=[123] ')"
   check "2 other events are skipped" 2 "$(log_count 'Not a chat message, skipped event=Tool')"
-  check "1 poison record in the dead-letter log" 1 "$(log_count 'DLQ reason=')"
-  check_contains "the dead-letter line carries the body" "not json at all" "$(log_text | grep 'DLQ reason=' | head -1)"
+  check "1 poison record in the dead-letter log" 1 "$(dlq_new)"
+  check_contains "the dead-letter line carries the body" "not json at all" "$(log_text | grep 'DLQ reason=' | tail -1)"
   check "1 tombstone skipped" 1 "$(log_count 'Tombstone skipped')"
   check "every offset is committed (no lag)" 0 "$(group_lag)"
 }
 
-ALL_SECTIONS="base receive"
+fx() { # GET path of the Foundry API under test (the fake or the real one); sets STATUS and BODY
+  if [ "${FOUNDRY_MODE}" = fake ]; then
+    BODY="$(curl -s -m 20 "http://localhost:8098/api/projects/fake$1" -H 'Authorization: Bearer test')"; STATUS=200
+  else
+    foundry GET "$1"
+  fi
+}
+fid() { sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map WHERE conversation_id='$1'"; }
+texts() { echo "${BODY}" | jq -r '[.data[]? | (.content|if type=="array" then .[0].text else . end)] | join(",")'; }
+section_first() {
+  echo "== first: the first message creates the Foundry conversation and both maps"
+  dlq_mark
+  store_message ts-f1 1 appUser "hola, quiero yapear"
+  store_message ts-f2 1 appMaker "claro, te ayudo"
+  printf '%s\n' $'ts-f1\t1\tUserMessageSent\thola, quiero yapear' $'ts-f2\t1\tAgentMessageSent\tclaro, te ayudo\tagent' | publish
+  wait_until "both first messages synced" 90 '[ "$(( $(synced ts-f1 1) + $(synced ts-f2 1) ))" -ge 2 ]'
+  check "a conversation row per conversation" 2 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id IN ('ts-f1','ts-f2')")"
+  check "an item row per message" 2 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id IN ('ts-f1','ts-f2')")"
+  check "last synced sequence is the message's" 1 "$(sql "SELECT last_synced_sequence FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-f1'")"
+  fx "/openai/v1/conversations/$(fid ts-f1)"
+  check "Foundry keeps our conversation id in the metadata" ts-f1 "$(echo "${BODY}" | jq -r .metadata.conversation_id)"
+  check "and the source" ms-ml-camel-conv-history-bs "$(echo "${BODY}" | jq -r .metadata.source)"
+  fx "/openai/v1/conversations/$(fid ts-f1)/items?order=asc"
+  check "the user message is the stored text" "hola, quiero yapear" "$(texts)"
+  check "as a user item" user "$(echo "${BODY}" | jq -r '.data[0].role')"
+  check "the item id in the map is Foundry's item" "$(echo "${BODY}" | jq -r '.data[0].id')" "$(sql "SELECT foundry_item_id FROM camel_history.foundry_item_map WHERE conversation_id='ts-f1' AND sequence=1")"
+  fx "/openai/v1/conversations/$(fid ts-f2)/items?order=asc"
+  check "the agent message is the stored text" "claro, te ayudo" "$(texts)"
+  check "as an assistant item" assistant "$(echo "${BODY}" | jq -r '.data[0].role')"
+  check "with output_text content" output_text "$(echo "${BODY}" | jq -r '.data[0].content[0].type')"
+  check "no dead-letter line in this section" 0 "$(dlq_new)"
+}
+
+section_order() {
+  echo "== order: messages arrive in sequence order, gaps included, and a repeat sends nothing"
+  local seqs=(1 2 3 5 6 9) roles=(appUser appMaker appUser appMaker appUser appMaker) i
+  for i in 0 1 2 3 4 5; do store_message ts-o1 "${seqs[$i]}" "${roles[$i]}" "m${seqs[$i]}"; done
+  local lines=()
+  for i in 0 1 2 3 4 5; do
+    local ev=UserMessageSent; [ "${roles[$i]}" = appMaker ] && ev=AgentMessageSent
+    lines+=("ts-o1"$'\t'"${seqs[$i]}"$'\t'"${ev}"$'\t'"m${seqs[$i]}")
+  done
+  printf '%s\n' "${lines[@]}" | publish
+  wait_until "6 messages synced" 90 '[ "$(log_count "Message synced conversation=ts-o1 ")" -ge 6 ]'
+  fx "/openai/v1/conversations/$(fid ts-o1)/items?order=asc&limit=100"
+  check "Foundry holds them in sequence order" "m1,m2,m3,m5,m6,m9" "$(texts)"
+  check "the item map has 6 rows" 6 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-o1'")"
+  check "last synced sequence is 9" 9 "$(sql "SELECT last_synced_sequence FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-o1'")"
+  check "only one Foundry conversation was made" 1 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-o1'")"
+  echo "   -- the same 6 events again"
+  printf '%s\n' "${lines[@]}" | publish
+  wait_until "6 repeats recognised" 60 '[ "$(log_count "Message duplicate conversation=ts-o1 ")" -ge 6 ]'
+  fx "/openai/v1/conversations/$(fid ts-o1)/items?order=asc&limit=100"
+  check "Foundry still holds 6 items" "m1,m2,m3,m5,m6,m9" "$(texts)"
+  check "the item map still has 6 rows" 6 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-o1'")"
+}
+
+section_wait() {
+  echo "== wait: the sync waits for the history consumer's row, for a while"
+  printf '%s\n' $'ts-w1\t1\tUserMessageSent\tllega tarde' | publish
+  sleep 3
+  check "nothing is sent while the row is missing" 0 "$(synced ts-w1 1)"
+  store_message ts-w1 1 appUser "llega tarde"
+  wait_until "the late row is picked up" 30 '[ "$(synced ts-w1 1)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-w1)/items?order=asc"
+  check "it is sent once the row exists" "llega tarde" "$(texts)"
+  check "and the late message was not dead-lettered" 0 "$(log_text | grep -c 'DLQ reason=projection-missing.*ts-w1' || true)"
+  echo "   -- a row that never comes (the wait is ${PROJECTION_WAIT:-6} s here), then a normal message behind it"
+  printf '%s\n' $'ts-w2\t1\tUserMessageSent\tnunca llega' | publish
+  wait_until "the missing row dead-lettered" 60 '[ "$(log_count "DLQ reason=projection-missing.*ts-w2")" -ge 1 ]'
+  check_contains "the line names the conversation table" "field=conversation_messages" "$(log_text | grep 'DLQ reason=projection-missing.*ts-w2' | head -1)"
+  store_message ts-w3 1 appUser "sigue"
+  printf '%s\n' $'ts-w3\t1\tUserMessageSent\tsigue' | publish
+  wait_until "the next message is not blocked" 60 '[ "$(synced ts-w3 1)" -ge 1 ]'
+  check "no conversation was made for the missing one" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-w2'")"
+}
+
+ALL_SECTIONS="base receive first order wait"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then
