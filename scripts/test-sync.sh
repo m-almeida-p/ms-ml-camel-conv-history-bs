@@ -451,6 +451,95 @@ section_errors() {
   check "the timeout is in the log" true "$([ "$(retries_for 'did not answer GET')" -ge 1 ] && echo true || echo false)"
 }
 
+all_item_texts() { # a Foundry conversation id: the text of every item, oldest first, each followed by "|" (pages of 20)
+  local after="" out="" more=true
+  while [ "${more}" = true ]; do
+    fx "/openai/v1/conversations/$1/items?order=asc&limit=20${after:+&after=${after}}"
+    out+="$(echo "${BODY}" | jq -j '[.data[]? | (.content|if type=="array" then .[0].text else . end)] | map(. + "|") | add // ""')"
+    more="$(echo "${BODY}" | jq -r '.has_more // false')"; after="$(echo "${BODY}" | jq -r '.data[-1].id // empty')"
+  done
+  printf '%s' "${out}"
+}
+
+sha() { shasum -a 256 | cut -c1-64; }
+
+section_edge() {
+  echo "== edge: a long conversation, the whole sync repeated, interleaved conversations, awkward text"
+  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (skipped with FOUNDRY_MODE=real: it sends hundreds of items)"; return 0; fi
+  dlq_mark
+
+  echo "   -- 130 messages in one conversation (more than a page of 100, more than 6 pages of 20)"
+  sql "INSERT INTO camel_history.conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, flow, occurred_at)
+       SELECT 'ts-x1', n, CASE WHEN n % 2 = 1 THEN 'appUser' ELSE 'appMaker' END, CASE WHEN n % 2 = 1 THEN 'acc-ts-x1' ELSE 'ms-ml-genai-agent-bs' END,
+              'long-m' || n, 'fixture', 'acc-ts-x1', 'p2p', timestamptz '2026-11-18 10:00:00+00' + (n || ' seconds')::interval
+       FROM generate_series(1, 130) n ON CONFLICT DO NOTHING" >/dev/null
+  python3 -I -c '
+for n in range(1, 131):
+    print("ts-x1\t%d\t%s\tlong-m%d%s" % (n, "UserMessageSent" if n % 2 else "AgentMessageSent", n, "" if n % 2 else "\tagent"))' > "/tmp/ts-x1.$$"
+  publish < "/tmp/ts-x1.$$"
+  wait_until "ts-x1: 130 messages synced" 300 '[ "$(synced ts-x1 130)" -ge 1 ] && [ "$(log_count "Message synced conversation=ts-x1 ")" -ge 130 ]'
+  local expected; expected="$(seq 1 130 | sed 's/^/long-m/; s/$/|/' | tr -d '\n')"
+  check "Foundry holds the 130 messages, in order, once each" "${expected}" "$(all_item_texts "$(fid ts-x1)")"
+  check "the item map has 130 rows" 130 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-x1'")"
+  check "last synced sequence is 130" 130 "$(sql "SELECT last_synced_sequence FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-x1'")"
+  check "one Foundry conversation was made for it" 1 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-x1'")"
+
+  echo "   -- the complete sync repeated: the same 130 events again"
+  local items_before conv_before; items_before="$(fake_items "$(fid ts-x1)")"; conv_before="$(fake_conversations)"
+  publish < "/tmp/ts-x1.$$"
+  wait_until "ts-x1: all 130 repeats recognised" 300 '[ "$(log_count "Message duplicate conversation=ts-x1 ")" -ge 130 ]'
+  check "Foundry still holds 130 items" "${items_before}" "$(fake_items "$(fid ts-x1)")"
+  check "no Foundry conversation was added" "${conv_before}" "$(fake_conversations)"
+  check "the item map has still 130 rows" 130 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-x1'")"
+  check "and no message was synced twice" 130 "$(log_count 'Message synced conversation=ts-x1 ')"
+  rm -f "/tmp/ts-x1.$$"
+
+  echo "   -- six conversations interleaved across the three partitions"
+  sql "INSERT INTO camel_history.conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, flow, occurred_at)
+       SELECT c, n, CASE WHEN n % 2 = 1 THEN 'appUser' ELSE 'appMaker' END, CASE WHEN n % 2 = 1 THEN 'acc-' || c ELSE 'ms-ml-genai-agent-bs' END,
+              c || '-m' || n, 'fixture', 'acc-' || c, 'p2p', timestamptz '2026-11-18 11:00:00+00' + (n || ' seconds')::interval
+       FROM unnest(ARRAY['ts-i1','ts-i2','ts-i3','ts-i4','ts-i5','ts-i6']) c, generate_series(1, 8) n ON CONFLICT DO NOTHING" >/dev/null
+  python3 -I -c '
+for n in range(1, 9):
+    for c in ("ts-i1", "ts-i2", "ts-i3", "ts-i4", "ts-i5", "ts-i6"):
+        print("%s\t%d\t%s\t%s-m%d%s" % (c, n, "UserMessageSent" if n % 2 else "AgentMessageSent", c, n, "" if n % 2 else "\tagent"))' | publish
+  wait_until "the 48 interleaved messages synced" 240 '[ "$(log_count "Message synced conversation=ts-i[1-6] ")" -ge 48 ]'
+  local c
+  for c in ts-i1 ts-i2 ts-i3 ts-i4 ts-i5 ts-i6; do
+    expected="$(seq 1 8 | sed "s/^/${c}-m/; s/\$/|/" | tr -d '\n')"
+    check "${c}: its 8 messages are in Foundry in order, and only its own" "${expected}" "$(all_item_texts "$(fid "${c}")")"
+  done
+  check "six conversations, six Foundry conversations" 6 "$(sql "SELECT count(DISTINCT foundry_conversation_id) FROM camel_history.foundry_conversation_map WHERE conversation_id LIKE 'ts-i%'")"
+
+  echo "   -- awkward text goes to Foundry byte for byte (compared by SHA-256 with what Postgres holds)"
+  python3 -I - <<'SQLGEN' | docker exec -i yape-postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q >/dev/null
+texts = [
+    "hola", "\U0001F468‍\U0001F469‍\U0001F467 \U0001F44D\U0001F3FD", "é vs é", "שלום مرحبا 中文",
+    "line1\nline2\ttab\r\nend", "\\ \"quotes\" 'single' {\"json\":true} <b>&amp;</b> '; DROP TABLE x;--", "   spaces around   ", "", "á" * 20000, "  ​﻿",
+]
+for i, text in enumerate(texts, start=1):
+    role, author = ("appUser", "acc-ts-w1") if i % 2 else ("appMaker", "ms-ml-genai-agent-bs")
+    assert "$tt$" not in text
+    print(f"INSERT INTO camel_history.conversation_messages (conversation_id, sequence, role, author_id, text, event_name, id_yape_account, flow, occurred_at) "
+          f"VALUES ('ts-w1', {i}, '{role}', '{author}', $tt${text}$tt$, 'fixture', 'acc-ts-w1', 'p2p', timestamptz '2026-11-18 12:00:00+00' + interval '{i} seconds') ON CONFLICT DO NOTHING;")
+SQLGEN
+  python3 -I -c '
+for n in range(1, 11):
+    print("ts-w1\t%d\t%s\tplaceholder%s" % (n, "UserMessageSent" if n % 2 else "AgentMessageSent", "" if n % 2 else "\tagent"))' | publish
+  wait_until "ts-w1: 10 messages synced" 120 '[ "$(log_count "Message synced conversation=ts-w1 ")" -ge 10 ]'
+  local fidw n db_sha f_sha; fidw="$(fid ts-w1)"
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    db_sha="$(sql "SELECT encode(sha256(convert_to(text, 'UTF8')), 'hex') FROM camel_history.conversation_messages WHERE conversation_id='ts-w1' AND sequence=${n}")"
+    fx "/openai/v1/conversations/${fidw}/items?order=asc&limit=1$( [ "${n}" -gt 1 ] && echo "&after=$(sql "SELECT foundry_item_id FROM camel_history.foundry_item_map WHERE conversation_id='ts-w1' AND sequence=$((n - 1))")" )"
+    f_sha="$(echo "${BODY}" | jq -j '.data[0].content | if type=="array" then .[0].text else . end' | sha)"
+    check "text #${n} is identical in Foundry and Postgres" "${db_sha}" "${f_sha}"
+  done
+
+  check "nothing was dead-lettered in this section" 0 "$(dlq_new)"
+  sleep 2
+  check "every offset is committed (no lag)" 0 "$(group_lag)"
+}
+
 section_broker() {
   echo "== broker: with the token broker down the sync waits, and goes on when it is back"
   if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (skipped with FOUNDRY_MODE=real)"; return 0; fi
@@ -473,7 +562,7 @@ section_broker() {
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}-b" >/dev/null 2>&1 || true
 }
 
-ALL_SECTIONS="base receive first order wait reconcile rebuild errors broker crash real401"
+ALL_SECTIONS="base receive first order wait reconcile rebuild edge errors broker crash real401"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then
