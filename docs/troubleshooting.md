@@ -56,19 +56,40 @@ Keep the tag equal to the Karavan version. Recreate Karavan:
 state is in the Postgres volume.
 Verify an image exists before using it: `docker manifest inspect ghcr.io/apache/camel-karavan-devmode:<tag>`.
 
-### No **Run** button after pressing Stop
-**Cause:** after a stop, the header shows only Stop and a trash icon.
-**Fix:** use the **Containers** tab, which has **Run**, **Stop** and **Delete**.
+### I clicked Run, a "Confirm run container?" dialog appeared, I confirmed, and nothing started
+**Cause:** the page has **two different Run buttons**, and the one in the **Containers** tab is not the one that starts a
+project. It runs an *image you built* (Build/Deploy) and asks for confirmation, and with no built image it does nothing:
+the Images list is empty and `docker logs karavan` shows no `DevMode starting` line. The button that starts the project in
+DevMode is **Run at the top right of the page**, next to the tab bar.
+**Fix:** click the top-right **Run** (it does not ask for confirmation). Karavan then logs
+`DevMode starting for <project>`, and `docker ps` shows the container within seconds.
+
+### The top-right Run is not there, only Stop and a trash icon
+**Cause:** while a DevMode container exists (running or stopped) the header shows Stop and a trash icon instead of Run.
+The Run in the **Containers** tab is then enabled, and is expected to restart that same container with the files it already
+has (we always deleted the container instead, so this was not tested).
+**Fix:** to start from the latest files, remove the container first: **Containers** tab → **Stop** → **Delete**
+(confirm). The top-right **Run** comes back. Click it.
 
 ### My change is saved but the running container behaves the old way
-**Cause:** DevMode copies the project files into the container when it is
-created. A stopped container keeps the old copy.
-**Fix:** Containers tab → **Stop** → **Delete** → **Run**.
+**Cause:** DevMode copies the project files into the container when it is created. A running or stopped container keeps
+that copy, so it does not see later changes.
+**Fix:** **Containers** tab → **Stop** → **Delete** → then the top-right **Run**. The log of the new container starts with
+`Extracted file: ...` lines, one per project file: check that they are the files you expect.
+
+### Run seems to do nothing for a few minutes
+**Cause:** the first run pulls the DevMode image (about 1.5 GB) and then downloads the dependencies from Maven Central. The
+UI shows no progress for either.
+**Fix:** wait, and watch Docker instead: `docker images | grep devmode` while it pulls, then
+`docker logs -f conv-history-consumer` while it downloads. Later runs reuse both and start in about 20 seconds.
+
+### A popup flashed ("Error Starting DevMode container", ...) and was gone before I could read it
+**Cause:** Karavan's error toasts disappear after a few seconds and give only a one-line message.
+**Fix:** read the cause in Karavan's server log: `docker logs karavan --since 5m | grep -E 'DevMode|ERROR'`.
 
 ### Header shows a spinner and the container list is empty
-**Cause:** the UI polls Karavan every few seconds, and button references go
-stale.
-**Fix:** reload the page. Check the truth with `docker ps -a`.
+**Cause:** the UI polls Karavan every few seconds and redraws, so what it shows can lag behind Docker by a moment.
+**Fix:** reload the page. The truth is `docker ps -a`.
 
 ---
 
@@ -192,7 +213,25 @@ unaffected.**
 
 ---
 
-## Editing in the Karavan UI
+## Using the Karavan UI
+
+Most of the time lost while building this went to the UI, not to Camel. This section is the map and the traps.
+
+### Which button does what
+
+| Where | Button | What it really does |
+|---|---|---|
+| Top right of the page | **Run** | Starts the project in **DevMode**: creates the container from the project's files. Shown only while no DevMode container exists. |
+| Top right of the page | **Stop** (square) and **trash** | Stop, and delete, the running DevMode container. |
+| Top right of the page | **Reload** | Appears while the project runs. We did not use or test it: apply changes with Stop, Delete and Run. |
+| **Containers** tab | **Run** | Asks "Confirm run container?" and runs an *image you built*; with a stopped container present it is expected to restart that container as it is (not tested). **Not** the way to start DevMode. |
+| **Containers** tab | **Stop** / **Delete** | Stop the container / remove it (asks "Confirm delete container?"). Deleting removes only the container, never the project. |
+| **Containers** tab | **Deploy** | Builds and deploys an image. Not used here. |
+| **Source** tab | **Pull** | Replaces the project's files with Git's. Warns that it rewrites everything not committed. |
+| **Source** tab | **Push** | Commits and pushes the ticked files. Disabled until a file is ticked. |
+| **Source** tab | **Create** / **Upload** | Add a file by typing / from disk, one file at a time. Neither replaces an existing file. |
+| **Source** tab | row icons | Edit, delete (asks to confirm), download. Not available for `application.properties` and `docker-compose.yaml`. |
+| **Topology** tab | **Properties** | Opens `application.properties` in the code editor. |
 
 ### Typing into the code editor scrambles my text
 **Cause:** the editor re-parses and reformats the file on every keystroke and
@@ -220,6 +259,28 @@ hand.
 **Cause:** it normalizes the file when you edit it.
 **Fix:** none needed. Order does not matter in a properties file.
 
+### Karavan changed my YAML after I only opened it
+**Cause:** opening a route in the **Designer** re-serializes it: long strings become folded blocks, keys are reordered and
+spacing changes. After opening `route-receive.camel.yaml` its size went from 6,034 to 6,086 bytes with the same meaning.
+**Fix:** none needed for behaviour. It does show up as a change in the Source tab and in `git diff`. If you want the file
+exactly as in Git, press **Pull** (it replaces Karavan's copy).
+
+### The size or the status of a file looks wrong right after I edited it
+**Cause:** the Source list refreshes late. After pasting `application.properties` it showed 3 bytes for a 3,425-byte file.
+**Fix:** reload the page. Check the content itself in the editor, not the size column.
+
+### What does work in the code editor
+Typing long text does not (see above), but these do:
+- Select all and paste: `Cmd+A`, `Cmd+V`. The reliable way to replace a whole file.
+- `Ctrl+G`, type a line number, `Enter`: go to a line.
+- `End`, `Home`, `Shift+End`, `Alt+Shift+Left`: move and select, for a one-word change such as `groovy` → `simple`.
+- Typing a short plain value, or one new line of a properties file, then `Esc` to close the suggestion box.
+Avoid pressing `Enter` while the suggestion box is open: it accepts the suggestion.
+
+### The Topology shows `{{app.topic}}` instead of the topic name
+**Cause:** the Designer draws the value as written. The placeholder is resolved at runtime from `application.properties`.
+**Fix:** none. The log shows the real topic (`Subscribed to topic(s): ...`).
+
 ---
 
 ## Git and Karavan
@@ -231,6 +292,15 @@ hand.
 ### Karavan's commits show `admin <admin@platform.platform>`
 **Cause:** that is the identity Karavan uses for its own commits.
 **Fix:** none. Your own commits (docs, compose, scripts) use your Git identity.
+
+### **Pull** warns "rewrites all non-committed code in the project"
+**Cause:** Pull replaces Karavan's copy of every file with Git's, so anything you changed in Karavan and did not push is lost.
+**Fix:** push first if you want to keep it. If the files in Karavan came from this repo and were not touched since, Pull is
+safe, and afterwards every file shows a commit time instead of `NEW` or `CHANGED`.
+
+### Files show `NEW` or `CHANGED` in the Source tab
+**Cause:** `NEW` is a file Karavan has that Git does not; `CHANGED` differs from Git. They are not committed yet.
+**Fix:** **Push** them, or **Pull** to discard them.
 
 ### My local clone is behind after a Karavan push
 **Fix:** `git pull --ff-only`. If you have local commits that Karavan has not

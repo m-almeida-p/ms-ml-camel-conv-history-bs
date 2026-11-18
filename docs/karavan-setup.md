@@ -149,4 +149,5 @@ were deleted.
 2. `cp .env.example .env` and set the token.
 3. `./scripts/up.sh`
 4. Open <http://localhost:9998>, log in, open `conv-history-consumer`.
-5. **Containers** tab → **Run**.
+5. Click **Run at the top right of the page** (not the Run of the Containers tab; see
+   [troubleshooting](troubleshooting.md#which-button-does-what)).

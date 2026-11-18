@@ -194,7 +194,8 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
 ## Run it
 
 1. Start the cluster and Karavan ([setup guide](karavan-setup.md)); apply the `camel_history` migrations.
-2. In Karavan open `conv-history-consumer` → **Containers** → **Run**. The first run pulls the DevMode image
+2. In Karavan open `conv-history-consumer` and click **Run at the top right of the page**. (The Run in the Containers tab
+   is a different button and does not start DevMode: see [troubleshooting](troubleshooting.md#which-button-does-what).) The first run pulls the DevMode image
    (about 1.5 GB) and downloads the dependencies, so allow a few minutes.
 3. Watch it: Karavan's **Log** tab, or `docker logs -f conv-history-consumer`. A healthy start shows
    `Routes startup (total:2)` (`routeReceive`, `routeDlq`), then the group joins and gets all 12 partitions.
@@ -205,7 +206,8 @@ Use these in `${header.<name>}`. The old `kafka.TOPIC` style names do not exist 
 Karavan stores the files in its database, and DevMode copies them into the container when it is created.
 
 1. Change the files in Karavan, or in this repo and then **Push** and **Pull** (see [setup](karavan-setup.md#how-karavan-and-git-work-together)).
-2. **Containers** → **Stop** → **Delete** → **Run**. Running the stopped container would reuse the old files.
+2. **Containers** tab → **Stop** → **Delete** (confirm), then **Run at the top right of the page**. Do not use
+   the Run of the Containers tab for this: it is for built images, and a stopped container keeps its old files.
 
 For quick iterations without Karavan, run the same image against the files in this repo:
 
