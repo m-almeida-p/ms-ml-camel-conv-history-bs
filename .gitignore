@@ -1,0 +1,8 @@
+# Secrets: holds the GitHub token Karavan uses. Never commit it.
+.env
+
+# Output of scripts/logs.sh. Container logs can contain sensitive data.
+logs_*.txt
+
+.idea/
+.DS_Store
