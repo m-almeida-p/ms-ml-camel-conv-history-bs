@@ -41,7 +41,9 @@ In `application.properties`; each can be overridden by an environment variable (
 | `app.foundry.tokenUrl` | `http://foundry-token:8099/token` | The broker. Not a secret |
 | `app.foundry.endpoint` | empty | Empty: the broker's endpoint, from `.env`. Set it to point at another Foundry, for example the fake |
 | `app.foundry.timeoutMs` | `10000` | How long a call to Foundry or the broker may take |
-| `app.sync.projectionWaitSeconds` | `60` | How long to wait for the history consumer's row |
+| `app.sync.projectionWaitSeconds` | `60` | How long to wait for the history consumer's row. Past it the record is dead-lettered (`projection-missing`) and its offset moves: see [what it does not do](#what-it-does-not-do) |
+
+The Kafka endpoint reads at most **20 records per poll** and allows **15 minutes** between polls (`maxPollRecords`, `maxPollIntervalMs` in `route-receive.camel.yaml`). A record costs about two Foundry calls, and a rebuild one per message, so with Kafka's defaults (500 records, 5 minutes) a catch-up after an outage could get the sync evicted from its group.
 
 ## What happens to each kind of record
 
@@ -107,7 +109,11 @@ before it sends, step 4.3 does this:
 1. List the items after the last mapped one (`order=asc&after=<last item>`). Normally there are none.
 2. Compare them, in order, with the stored messages that come next, by role and by text. Each that matches is **adopted**: it is
    recorded in the item map with the message's sequence, and not sent.
-3. If the message being handled is among them, it was already in Foundry: nothing is sent. Otherwise it is sent now.
+3. If the message being handled is among them, it was already in Foundry: nothing is sent. Otherwise it is sent now, **together with
+   every earlier stored message that Foundry does not hold**, in order. An earlier message can be missing because its record was
+   skipped (see below), and sending only the later one would leave a gap for good. If Foundry already holds a *later* message than
+   a missing one, or the current message is beyond the 100 candidates the query reads, appending cannot keep the order: the
+   conversation is rebuilt.
 
 All of it is one bean method, `FoundryClient.addItem`, and one statement that records every item. If the list shows something no
 message accounts for, the conversation is rebuilt.
@@ -134,6 +140,10 @@ The log says why, at `WARN`: `Rebuilding conversation=… reason=…` and `Conve
 
 ## What it does not do
 
+- It does not wait for the history consumer for ever. After `app.sync.projectionWaitSeconds` it dead-letters the record, and a
+  consumer that is down for longer than that makes the sync skip every record in the meantime. The skipped messages are sent
+  with the next message of their conversation (step 4.3 above), but a conversation whose *last* messages were skipped stays short
+  in Foundry until another message arrives. Fix by replaying: reset the sync group's offsets, or raise the setting.
 - It does not send a message in batches: one item per call. Foundry accepts 20 per request; batches are for later.
 - It does not find an orphan, a conversation created whose map row was lost to a crash between the two. The retry makes another. An
   orphan is harmless; `scripts/foundry-cleanup-orphans.sh` finds and deletes them.

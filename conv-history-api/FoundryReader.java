@@ -81,9 +81,9 @@ public class FoundryReader {
     // ---- HTTP, token and outcome classification --------------------------------------------------------------------
 
     private String get(String path) throws IOException {
-        ensureToken();
+        String bearer = ensureToken();
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl() + path)).timeout(timeout)
-                .header("Authorization", "Bearer " + token).header("Accept", "application/json").GET().build();
+                .header("Authorization", "Bearer " + bearer).header("Accept", "application/json").GET().build();
         HttpResponse<String> response;
         try {
             response = http.send(request, HttpResponse.BodyHandlers.ofString());
@@ -107,9 +107,10 @@ public class FoundryReader {
         throw new IllegalStateException("Foundry answered " + status + " to GET " + path.substring(0, path.indexOf('?')));
     }
 
-    private synchronized void ensureToken() throws IOException {
+    /** The token to send. Returned from inside the lock: a field read after it could be cleared by another thread's 401. */
+    private synchronized String ensureToken() throws IOException {
         if (token != null && Instant.now().isBefore(tokenExpires)) {
-            return;
+            return token;
         }
         HttpRequest request = HttpRequest.newBuilder(URI.create(tokenUrl)).timeout(timeout).GET().build();
         try {
@@ -134,6 +135,7 @@ public class FoundryReader {
             }
             throw new FoundryUnavailableException("the token broker did not answer: " + e.getClass().getSimpleName(), e);
         }
+        return token;
     }
 
     private synchronized void invalidateToken() {

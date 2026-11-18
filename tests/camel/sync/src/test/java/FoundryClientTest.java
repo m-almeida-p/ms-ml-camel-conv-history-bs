@@ -280,7 +280,7 @@ class FoundryClientTest {
     // ---- statuses (the broker class stands in for Foundry here: any status is possible) ----------------------------------
 
     @ParameterizedTest(name = "Foundry answers {0}")
-    @ValueSource(ints = {401, 403, 408, 429, 500, 502, 503, 504})
+    @ValueSource(ints = {301, 302, 307, 401, 403, 408, 429, 500, 502, 503, 504})
     void aStatusThatALaterTryCanFixIsUnavailable(int status) throws Exception {
         try (FakeHttp foundry = new FakeHttp()) {
             foundry.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"" + foundry.url() + "\",\"expiresIn\":3600}"));
@@ -438,6 +438,76 @@ class FoundryClientTest {
         assertEquals("false", header(exchange, "adoptedCurrent"), "the held item is sequence 2; sequence 3 still has to be sent");
         assertEquals(List.of(2, 3), record(exchange, "adoptJson").stream().map(r -> r.get("sequence")).toList());
         assertEquals(3, itemsOf(conv).size());
+    }
+
+    @Test
+    void aMessageSkippedEarlierIsSentBeforeALaterOneSoFoundryHasNoGap() throws Exception {
+        // sequence 3 was dead-lettered (the consumer was down), then sequence 4 arrives: both are stored now
+        String conv = foundryHolding("user", "m1", "user", "m2");
+        String last = itemsOf(conv).get(1).get("id");
+        Exchange exchange = forAdd(conv, 2, last, 4, List.of(stored(3, "appUser", "m3"), stored(4, "appUser", "m4")));
+
+        client.addItem(exchange);
+
+        assertEquals(java.util.List.of("m1", "m2", "m3", "m4"), itemsOf(conv).stream().map(i -> i.get("text")).toList());
+        assertEquals(List.of(3, 4), record(exchange, "adoptJson").stream().map(r -> r.get("sequence")).toList());
+        assertEquals("false", header(exchange, "reconcileMismatch"));
+    }
+
+    @Test
+    void aLaterMessageAlreadyInFoundryWithAnEarlierOneMissingMeansRebuild() throws Exception {
+        String conv = foundryHolding("user", "m1", "user", "m2", "user", "m4");   // damage from an older version: 3 is missing
+        String second = itemsOf(conv).get(1).get("id");
+        Exchange exchange = forAdd(conv, 2, second, 4, List.of(stored(3, "appUser", "m3"), stored(4, "appUser", "m4")));
+
+        client.addItem(exchange);
+
+        assertEquals("true", header(exchange, "reconcileMismatch"), "appending 3 now would put it after 4");
+        assertEquals(3, itemsOf(conv).size(), "nothing was sent");
+    }
+
+    @Test
+    void aCurrentMessageBeyondTheCandidatesWindowMeansRebuildNotAGap() throws Exception {
+        String conv = foundryHolding("user", "m1");
+        String first = itemsOf(conv).get(0).get("id");
+        List<Map<String, Object>> window = new ArrayList<>();
+        for (int s = 2; s <= 101; s++) {
+            window.add(stored(s, "appUser", "m" + s));   // the query's LIMIT 100: sequences 2..101
+        }
+        Exchange exchange = forAdd(conv, 1, first, 101, window);
+        exchange.getMessage().setHeader("sequence", 150);   // the message being handled is beyond them
+        exchange.getMessage().setHeader("storedText", "m150");
+
+        client.addItem(exchange);
+
+        assertEquals("true", header(exchange, "reconcileMismatch"));
+        assertEquals(1, itemsOf(conv).size());
+    }
+
+    @Test
+    void aHundredMatchingItemsWithMoreBehindThemMeansRebuildNotAGuess() throws Exception {
+        // Foundry lists 100 items at most per call. 101 follow the last mapped one and the first 100 all match the candidates (the
+        // query's LIMIT 100): only has_more tells that one more exists that nobody can account for.
+        String conv = foundryHolding("user", "m1");
+        for (int from = 2; from <= 102; from += 20) {
+            StringBuilder chunk = new StringBuilder();
+            for (int s = from; s < from + 20 && s <= 102; s++) {
+                chunk.append(chunk.length() == 0 ? "" : ",").append(ObjectMapperHelper.one("user", "m" + s));
+            }
+            post("/openai/v1/conversations/" + conv + "/items", "{\"items\":[" + chunk + "]}");   // at most 20 items per request
+        }
+        assertEquals(102, itemsOf(conv).size(), "the fixture is what the test says it is");
+        String first = itemsOf(conv).get(0).get("id");
+        List<Map<String, Object>> window = new ArrayList<>();
+        for (int s = 2; s <= 101; s++) {
+            window.add(stored(s, "appUser", "m" + s));
+        }
+        Exchange exchange = forAdd(conv, 1, first, 101, window);
+
+        client.addItem(exchange);
+
+        assertEquals("true", header(exchange, "reconcileMismatch"), "has_more is true: the 101st item is unexplained");
+        assertEquals(102, itemsOf(conv).size(), "nothing was sent");
     }
 
     @Test

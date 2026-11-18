@@ -25,6 +25,7 @@ import org.apache.camel.Exchange;
  *   404                                  the answer, for the caller to read (the conversation is gone)
  *   401, 403, 408, 429, 5xx, no answer   FoundryUnavailableException: retried in place, forever
  *   any other 4xx                        FoundryRejectedException: the dead-letter log
+ *   3xx, 1xx                             FoundryUnavailableException: a redirect is a setting or a gateway, not the record's fault
  *
  * Settings: app.foundry.tokenUrl (the broker), app.foundry.endpoint (empty: the broker's endpoint) and
  * app.foundry.timeoutMs. The conversation id travels in the metadata of the Foundry conversation, with the source.
@@ -80,7 +81,8 @@ public class FoundryClient {
      * the check for such an item and the send have to be the same step: every retry looks first.
      *
      * The items after the last mapped one are compared, in order, with the stored messages that come next ("candidates").
-     * Those that match are adopted. If the message being handled is not among them, it is sent.
+     * Those that match are adopted. Every stored message up to the one being handled that Foundry does not hold is then sent, in order
+     * (the one being handled, and any earlier one that was skipped), or the conversation is rebuilt when appending cannot keep the order.
      *
      * Reads the headers convMapRow, lastItemRow (the id of the last mapped item, or none) and candidates (the next
      * stored messages: sequence, role, text), plus storedRole and storedText. Sets:
@@ -146,16 +148,43 @@ public class FoundryClient {
             exchange.getMessage().setHeader("rebuildReason", "unknown-items");
             return;
         }
-        if (!adoptedCurrent) {
+        // The stored messages up to the current one that Foundry does not hold go now, in order, so Foundry has no gap: an earlier
+        // record may have been skipped (dead-lettered after the wait for the consumer, or refused). If Foundry already holds a
+        // LATER one, or the current message is beyond the candidates' window, appending cannot put them in place: rebuild.
+        java.util.Set<Integer> held = new java.util.HashSet<>();
+        int highestHeld = 0;
+        for (JsonNode entry : record) {
+            held.add(entry.path("sequence").asInt());
+            highestHeld = Math.max(highestHeld, entry.path("sequence").asInt());
+        }
+        List<Map<String, Object>> missing = new ArrayList<>();
+        boolean currentListed = false;
+        for (int k = 0; candidates != null && k < candidates.size(); k++) {
+            int sequence = ((Number) candidates.get(k).get("sequence")).intValue();
+            if (sequence > current) {
+                break;
+            }
+            currentListed |= sequence == current;
+            if (!held.contains(sequence)) {
+                missing.add(candidates.get(k));
+            }
+        }
+        boolean gapBelowHeld = !missing.isEmpty() && ((Number) missing.get(0).get("sequence")).intValue() < highestHeld;
+        if (gapBelowHeld || (!currentListed && !adoptedCurrent)) {
+            exchange.getMessage().setHeader("reconcileMismatch", true);
+            exchange.getMessage().setHeader("rebuildReason", "unknown-items");
+            return;
+        }
+        for (Map<String, Object> message : missing) {
             ObjectNode body = JSON.createObjectNode();
-            body.putArray("items").add(item(exchange.getMessage().getHeader("storedRole", String.class), exchange.getMessage().getHeader("storedText", String.class)));
+            body.putArray("items").add(item(String.valueOf(message.get("role")), String.valueOf(message.get("text"))));
             Answer added = call(exchange, "POST", base + "/items", body.toString());
             if (added.status() == 404) {
                 exchange.getMessage().setHeader("foundryGone", true);
                 exchange.getMessage().setHeader("rebuildReason", "gone");
                 return;
             }
-            record.addObject().put("sequence", current).put("itemId", firstItemId(added.body()));
+            record.addObject().put("sequence", ((Number) message.get("sequence")).intValue()).put("itemId", firstItemId(added.body()));
         }
         exchange.getMessage().setHeader("adoptJson", record.toString());
         exchange.getMessage().setHeader("adoptCount", record.size());
@@ -255,9 +284,9 @@ public class FoundryClient {
     // ---- HTTP, token and outcome classification --------------------------------------------------------------------
 
     private Answer call(Exchange exchange, String method, String path, String json) throws IOException, FoundryRejectedException {
-        ensureToken();
+        String bearer = ensureToken();
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl() + path)).timeout(timeout)
-                .header("Authorization", "Bearer " + token).header("Accept", "application/json");
+                .header("Authorization", "Bearer " + bearer).header("Accept", "application/json");
         if (json == null) {
             request.method(method, HttpRequest.BodyPublishers.noBody());
         } else {
@@ -279,7 +308,7 @@ public class FoundryClient {
         if (status == 401) {
             invalidateToken();
         }
-        if (status == 401 || status == 403 || status == 408 || status == 429 || status >= 500) {
+        if (status == 401 || status == 403 || status == 408 || status == 429 || status >= 500 || status / 100 != 4) {   // not 4xx: a redirect from a gateway, say
             throw new FoundryUnavailableException("Foundry answered " + status + " to " + method + " " + path);
         }
         throw rejected(exchange, status, response.body());
@@ -298,9 +327,10 @@ public class FoundryClient {
         return new FoundryRejectedException(exchange, status, code, message.length() > MAX_DETAIL ? message.substring(0, MAX_DETAIL) : message);
     }
 
-    private synchronized void ensureToken() throws IOException {
+    /** The token to send. Returned from inside the lock: a field read after it could be cleared by another thread's 401. */
+    private synchronized String ensureToken() throws IOException {
         if (token != null && Instant.now().isBefore(tokenExpires)) {
-            return;
+            return token;
         }
         HttpRequest request = HttpRequest.newBuilder(URI.create(tokenUrl)).timeout(timeout).GET().build();
         try {
@@ -325,6 +355,7 @@ public class FoundryClient {
             }
             throw new FoundryUnavailableException("the token broker did not answer: " + e.getClass().getSimpleName(), e);
         }
+        return token;
     }
 
     private synchronized void invalidateToken() {

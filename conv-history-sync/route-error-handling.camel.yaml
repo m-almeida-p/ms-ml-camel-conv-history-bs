@@ -60,7 +60,7 @@
             - bean:
                 id: nameStoreRefusal
                 description: Name the refusal
-                note: "Reason store-rejected, field sqlstate-<code>, found in the cause chain. Docs: conv-history-consumer.md > What happens to each kind of record."
+                note: "Reason store-rejected, field sqlstate-<code>, found in the cause chain. Docs: conv-history-sync.md > Error handling."
                 ref: storeRefusal
                 method: name
             - to:

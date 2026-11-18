@@ -93,6 +93,22 @@ included. `ApiRequest`, `ProblemResponder` and the first step of the health rout
 (`Camel*`), after `ApiRequest` has read the query from the raw string. The tests that found it are in
 `tests/camel/api/src/test/java/ApiRoutesTest.java` (`theResponseDoesNotEchoTheRequestsHeadersOrItsQueryParameters` and three more).
 
+## Who can call it
+
+**Nobody is authenticated.** Like the reference service, this is a PoC: the contract says so (`docs/contract/`, "there is no
+authentication, so it must not be deployed"). It trusts what it is given:
+
+- `GET /v1/conversations` takes the account from the `idYapeAccount` query parameter, as sent.
+- `GET /v1/conversations/{id}/messages` takes **no account at all**: whoever knows a conversation id reads its messages. The ids
+  (`conv_v1_<uuid>`) cannot be guessed, but they are in every list answer, in the `Link` headers and in the dead-letter log.
+
+So a deployment needs a gateway in front that binds `idYapeAccount` to the caller, and that cannot enforce ownership on
+`/messages` unless it keeps its own conversation-to-account mapping or asks the list first. If that gap matters, the fix is an
+optional `idYapeAccount` on `/messages` that must match the conversation's (404 on a mismatch): a contract change, so not made here.
+
+On a developer machine the compose files publish `8086` (API), `8084` (sync), `8081` (consumer), Karavan (`9998`) and its image
+registry (`5555`) on **all** interfaces, so anyone on the same network reaches them. Bind them to `127.0.0.1` on a shared network.
+
 ## Differences from the reference service
 
 The contract is the same and the tests check every response against it. These are the places where this service behaves

@@ -17,6 +17,10 @@
         autoCommitEnable: false
         allowManualCommit: true
         breakOnFirstError: true
+        # A record costs about two Foundry calls (a rebuild, one per message), so a poll of 500 records could outlast Kafka's 300 s and get
+        # the consumer evicted from the group. Smaller polls, and a longer allowance.
+        maxPollRecords: "20"
+        maxPollIntervalMs: "900000"
         valueDeserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
       steps:
         - bean:

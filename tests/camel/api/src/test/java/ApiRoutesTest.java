@@ -731,6 +731,19 @@ class ApiRoutesTest {
     }
 
     @Test
+    void camelsOwnSqlHeadersFromAClientDoNotChangeTheQuery() throws Exception {
+        // camel-sql lets a CamelSqlQuery header replace the statement: whatever a client sends under that name must have no effect
+        for (String path : List.of("/v1/conversations?idYapeAccount=jt-acct-main", "/v1/conversations?idYapeAccount=jt-acct-main&CamelSqlQuery=SELECT%201%20AS%20x&camelsqlquery=SELECT%202")) {
+            HttpResponse<String> response = get(path, "CamelSqlQuery", "SELECT 1 AS conversation_id", "camelsqlquery", "SELECT 2", "CamelSqlOutputType", "SelectOne");
+
+            assertEquals(200, response.statusCode(), response.body());
+            assertEquals(List.of("jt-c-6", "jt-c-5", "jt-c-4", "jt-c-3", "jt-c-2", "jt-c-1", "jt-c-0"), conversationIds(json(response)), path);
+        }
+        HttpResponse<String> messages = get("/v1/conversations/jt-m-main/messages?page%5Bsize%5D=2", "CamelSqlQuery", "SELECT 'x'", "CamelSqlOutputType", "SelectOne");
+        assertEquals(List.of("24", "25"), messageIds(json(messages)));
+    }
+
+    @Test
     void aControlCharacterInAParameterNameIsAnAnswerToo() throws Exception {
         HttpResponse<String> response = get("/v1/conversations?idYapeAccount=jt-acct-main&x%0Ay=1");
 

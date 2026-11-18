@@ -111,7 +111,7 @@ start_project() {
 
 section_base() {
   echo "== base: the copied beans are the consumer's beans"
-  for f in ConversationEventDecoder.java PoisonRecordException.java OffsetCommit.java; do
+  for f in ConversationEventDecoder.java PoisonRecordException.java OffsetCommit.java StoreRefusal.java; do
     check "${f} is identical to the consumer's" "$(shasum "${REPO_DIR}/conv-history-consumer/${f}" | cut -c1-40)" "$(shasum "${REPO_DIR}/${PROJECT}/${f}" | cut -c1-40)"
   done
   check "the group is not the consumer's" true "$(! grep -q 'groupId=ms-ml-camel-conv-history-bs$' "${REPO_DIR}/${PROJECT}/application.properties" && echo true || echo false)"
@@ -365,11 +365,13 @@ section_rebuild() {
   echo "== rebuild: a conversation Foundry cannot repair by adding is built again from the stored messages"
   dlq_mark
   echo "   -- a late event: message 2 arrives after message 3"
-  store_message ts-l1 1 appUser "m1"; store_message ts-l1 2 appMaker "m2"; store_message ts-l1 3 appUser "m3"
+  # Message 2's row is not stored yet when message 3 is handled (if it were, the sync would send it first, with no rebuild: see edge)
+  store_message ts-l1 1 appUser "m1"; store_message ts-l1 3 appUser "m3"
   printf '%s\n' $'ts-l1\t1\tUserMessageSent\tm1' $'ts-l1\t3\tUserMessageSent\tm3' | publish
   wait_until "messages 1 and 3 synced" 60 '[ "$(( $(synced ts-l1 1) + $(synced ts-l1 3) ))" -ge 2 ]'
   local old; old="$(fid ts-l1)"
   fx "/openai/v1/conversations/${old}/items?order=asc"; check "Foundry has the gap before the late event" "m1,m3" "$(texts)"
+  store_message ts-l1 2 appMaker "m2"   # the consumer stores it now, and its record reaches the sync
   printf '%s\n' $'ts-l1\t2\tAgentMessageSent\tm2\tagent' | publish
   wait_until "the late message rebuilt the conversation" 60 '[ "$(log_count "Conversation rebuilt conversation=ts-l1 reason=late-event")" -ge 1 ]'
   fx "/openai/v1/conversations/$(fid ts-l1)/items?order=asc&limit=100"
@@ -535,6 +537,17 @@ for n in range(1, 11):
     f_sha="$(echo "${BODY}" | jq -j '.data[0].content | if type=="array" then .[0].text else . end' | sha)"
     check "text #${n} is identical in Foundry and Postgres" "${db_sha}" "${f_sha}"
   done
+
+  echo "   -- a message that was skipped earlier is not lost when a later one arrives"
+  store_message ts-s1 1 appUser "s1"; store_message ts-s1 2 appMaker "s2"
+  printf '%s\n' $'ts-s1\t1\tUserMessageSent\ts1' $'ts-s1\t2\tAgentMessageSent\ts2\tagent' | publish
+  wait_until "ts-s1: messages 1 and 2 synced" 90 '[ "$(synced ts-s1 2)" -ge 1 ]'
+  # sequence 3 is in conversation_messages but its record was skipped (the sync gave up waiting for the consumer, say): no event for it
+  store_message ts-s1 3 appUser "s3"; store_message ts-s1 4 appMaker "s4"
+  printf '%s\n' $'ts-s1\t4\tAgentMessageSent\ts4\tagent' | publish
+  wait_until "ts-s1: message 4 synced" 90 '[ "$(synced ts-s1 4)" -ge 1 ]'
+  check "Foundry holds the skipped message too, in order" "s1|s2|s3|s4|" "$(all_item_texts "$(fid ts-s1)")"
+  check "the item map has all four" 4 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-s1'")"
 
   check "nothing was dead-lettered in this section" 0 "$(dlq_new)"
   sleep 2

@@ -10,7 +10,8 @@ import org.apache.camel.ValidationException;
  * name, because a class compiled from this project's Java files cannot be resolved by name there.
  *
  * The reason is one of: header, no-schema-header, schema-id, schema-violation, json, field-missing,
- * field-malformed, field-range, payload, metadata, occurred-at, store-rejected.
+ * field-malformed, field-range, payload, metadata, occurred-at, store-rejected. The sync also uses
+ * projection-missing, foundry-rejected and unexpected.
  */
 public class PoisonRecordException extends ValidationException {
 
