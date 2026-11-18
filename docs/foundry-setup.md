@@ -79,7 +79,7 @@ curl -s localhost:8086/health                                             # {"st
 | `test-fake-foundry.sh` | The fake Foundry behaves like the real one (81 checks) | Cluster, Foundry |
 | `test-sync.sh` | The sync: order, repeats, reconciliation, rebuilds, errors, a broker that is down | Cluster; `FOUNDRY_MODE=real` runs some on the real Foundry |
 | `test-api.sh` | The API: validation, list, messages, failures, and every response against the contract | Cluster |
-| `test-camel.sh` | 373 JUnit tests of the projects' own Java and YAML: request validation, the decoder, the reconcile matrix, and the API and the consumer's store as a client or the database sees them | Cluster, fake Foundry |
+| `test-camel.sh` | 372 JUnit tests of the projects' own Java and YAML: request validation, the decoder, the reconcile matrix, and the API and the consumer's store as a client or the database sees them | Cluster, fake Foundry |
 | `test-all.sh` | Every suite in turn, one table at the end | Cluster, Foundry |
 | `test-cleanup-orphans.sh` | The orphan cleanup, on the real project | Foundry |
 | `oracle-api.sh` | The API against SQL on the data, for every account | Karavan-run API |

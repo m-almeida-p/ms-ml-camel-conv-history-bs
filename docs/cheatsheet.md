@@ -148,7 +148,7 @@ Tests (each starts the project on throwaway topics, groups and fixtures, and rem
 ./scripts/test-fake-foundry.sh        # the fake Foundry matches the real one; its faults work
 ./scripts/test-sync.sh                # 120 checks (fake Foundry); also: ./scripts/test-sync.sh reconcile rebuild edge errors
 ./scripts/test-api.sh                 # 273 checks; every response is checked against docs/contract/
-./scripts/test-camel.sh               # 373 JUnit tests in a Maven container (api 246, consumer 81, sync 46); one module: ./scripts/test-camel.sh api ApiRoutesTest
+./scripts/test-camel.sh               # 372 JUnit tests in a Maven container (api 245, consumer 81, sync 46); one module: ./scripts/test-camel.sh api ApiRoutesTest
 ./scripts/test-all.sh                 # every suite, then one table (about 15 min); --offline skips the real Foundry, --e2e adds the real producer flow
 FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same sections on the real Foundry
 ./scripts/fake-foundry.sh start|stop|status                     # the fake, on the Karavan network and on localhost:8098
