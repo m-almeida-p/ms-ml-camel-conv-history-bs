@@ -42,6 +42,7 @@ cleanup() {
   "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC}" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}" >/dev/null 2>&1 || true
   docker start foundry-token >/dev/null 2>&1 || true   # the broker section stops it
+  docker rm -f foundry-token-flaky >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -79,6 +80,21 @@ group_lag() { # total lag of the throwaway group, 0 when everything is committed
     | awk -v t="${TOPIC}" '$2==t && $6 ~ /^[0-9]+$/ {lag+=$6; seen=1} END {print seen ? lag+0 : "none"}'
 }
 
+relaunch_project() { # start the project again on the same topic and group (it replaces a running or killed container)
+  local endpoint=""
+  [ "${FOUNDRY_MODE}" = fake ] && endpoint="${FAKE_ENDPOINT}"
+  "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC}" "APP_KAFKA_GROUPID=${GROUP}" "APP_FOUNDRY_ENDPOINT=${endpoint}" \
+    "APP_SYNC_PROJECTIONWAITSECONDS=${PROJECTION_WAIT:-6}" "APP_FOUNDRY_TIMEOUTMS=${FOUNDRY_TIMEOUT_MS:-2000}" ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} >/dev/null
+  for _ in $(seq 1 120); do
+    [ "$(log_count 'Successfully joined group')" -gt 0 ] && return 0
+    if [ "$(log_count 'Error starting Camel|FailedToCreateRoute|Compilation error')" -gt 0 ]; then
+      log_text | grep -E 'ERROR|error:|Caused by' | head -8 >&2; echo "❌  ${PROJECT} did not start" >&2; exit 1
+    fi
+    sleep 2
+  done
+  echo "❌  ${PROJECT} did not join the group" >&2; exit 1
+}
+
 start_project() {
   STARTED=1
   echo "🧪  topic ${TOPIC}, group ${GROUP}, Foundry: ${FOUNDRY_MODE}"
@@ -90,16 +106,7 @@ start_project() {
     endpoint="${FAKE_ENDPOINT}"
   fi
   echo "🚀  starting ${PROJECT} (the first start downloads dependencies, about a minute)"
-  "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC}" "APP_KAFKA_GROUPID=${GROUP}" "APP_FOUNDRY_ENDPOINT=${endpoint}" \
-    "APP_SYNC_PROJECTIONWAITSECONDS=${PROJECTION_WAIT:-6}" "APP_FOUNDRY_TIMEOUTMS=${FOUNDRY_TIMEOUT_MS:-2000}" ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} >/dev/null
-  for _ in $(seq 1 120); do
-    [ "$(log_count 'Successfully joined group')" -gt 0 ] && return 0
-    if [ "$(log_count 'Error starting Camel|FailedToCreateRoute|Compilation error')" -gt 0 ]; then
-      log_text | grep -E 'ERROR|error:|Caused by' | head -8 >&2; echo "❌  ${PROJECT} did not start" >&2; exit 1
-    fi
-    sleep 2
-  done
-  echo "❌  ${PROJECT} did not join the group" >&2; exit 1
+  relaunch_project
 }
 
 section_base() {
@@ -208,7 +215,26 @@ section_wait() {
 
 section_reconcile() {
   echo "== reconcile: an item Foundry kept but we never recorded is adopted, not sent twice"
-  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (needs the fake Foundry's 'drop' fault: skipped with FOUNDRY_MODE=real)"; return 0; fi
+  if [ "${FOUNDRY_MODE}" != fake ]; then
+    # The real Foundry cannot be told to lose an answer, so the state a crash leaves is made by hand: the item is already in
+    # Foundry and the item map has no row for it. What is tested is the same: the list after the last mapped item, on the real API.
+    echo "   (real Foundry: the item is put there by hand, which is exactly the state a lost answer leaves)"
+    store_message ts-c1 1 appUser "m1"; store_message ts-c1 2 appMaker "m2"; store_message ts-c1 3 appUser "m3"
+    printf '%s\n' $'ts-c1\t1\tUserMessageSent\tm1' | publish
+    wait_until "the first message synced" 60 '[ "$(synced ts-c1 1)" -ge 1 ]'
+    fxw POST "/openai/v1/conversations/$(fid ts-c1)/items" '{"items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"m2"}]}]}'
+    printf '%s\n' $'ts-c1\t2\tAgentMessageSent\tm2\tagent' | publish
+    wait_until "message 2 recorded" 60 '[ "$(synced ts-c1 2)" -ge 1 ]'
+    fx "/openai/v1/conversations/$(fid ts-c1)/items?order=asc&limit=100"
+    check "on the real Foundry each message is still there once" "m1,m2" "$(texts)"
+    check "the real item was adopted, not sent again" 1 "$(log_count 'Message adopted conversation=ts-c1 sequence=2')"
+    check "the map holds the real item's id" "$(echo "${BODY}" | jq -r '.data[1].id')" "$(sql "SELECT foundry_item_id FROM camel_history.foundry_item_map WHERE conversation_id='ts-c1' AND sequence=2")"
+    printf '%s\n' $'ts-c1\t3\tUserMessageSent\tm3' | publish
+    wait_until "message 3" 60 '[ "$(synced ts-c1 3)" -ge 1 ]'
+    fx "/openai/v1/conversations/$(fid ts-c1)/items?order=asc&limit=100"
+    check "and the conversation goes on in order" "m1,m2,m3" "$(texts)"
+    return 0
+  fi
   store_message ts-c1 1 appUser "m1"; store_message ts-c1 2 appMaker "m2"; store_message ts-c1 3 appUser "m3"
   printf '%s\n' $'ts-c1\t1\tUserMessageSent\tm1' | publish
   wait_until "the first message synced" 60 '[ "$(synced ts-c1 1)" -ge 1 ]'
@@ -236,6 +262,102 @@ section_reconcile() {
   fx "/openai/v1/conversations/$(fid ts-c2)/items?order=asc&limit=100"
   check "still each message once, in order" "a1,a2,a3" "$(texts)"
   check "three rows in the item map" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-c2'")"
+}
+
+fake_items() { curl -s http://localhost:8098/__state | jq -r ".items[\"$1\"] // 0"; }
+fake_conversations() { curl -s http://localhost:8098/__state | jq -r '.conversations'; }
+orphans_of() { # our conversation id: how many Foundry conversations carry it in their metadata but are not the mapped one
+  fx "/openai/v1/conversations?limit=100&order=desc"
+  echo "${BODY}" | jq -r --arg c "$1" '.data[] | select(.metadata.conversation_id == $c) | .id' | grep -vxF "$(fid "$1")" | wc -l | tr -d ' '
+}
+kill_sync() { docker kill "${CONTAINER}" >/dev/null; }
+
+section_crash() {
+  echo "== crash: the sync is killed (docker kill, SIGKILL) while Foundry holds work it never recorded"
+  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (needs the fake Foundry to hold an answer back: skipped with FOUNDRY_MODE=real)"; return 0; fi
+  dlq_mark
+
+  echo "   -- 1. killed after Foundry kept the item and before the sync recorded it"
+  store_message ts-k1 1 appUser "m1"; store_message ts-k1 2 appMaker "m2"; store_message ts-k1 3 appUser "m3"
+  printf '%s\n' $'ts-k1\t1\tUserMessageSent\tm1' | publish
+  wait_until "message 1 synced" 60 '[ "$(synced ts-k1 1)" -ge 1 ]'
+  local k1; k1="$(fid ts-k1)"
+  fake_fail '{"mode":"late","count":1,"delayMs":25000,"method":"POST"}'
+  printf '%s\n' $'ts-k1\t2\tAgentMessageSent\tm2\tagent' | publish
+  wait_until "Foundry applied message 2" 40 "[ \"\$(fake_items ${k1})\" = 2 ]"
+  kill_sync
+  fx "/openai/v1/conversations/${k1}/items?order=asc&limit=100"
+  check "the process is dead" false "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}")"
+  check "Foundry holds the item the dead sync never recorded" "m1,m2" "$(texts)"
+  check "the item map has no row for it" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-k1' AND sequence=2")"
+  check "its offset was never committed: the group still owes records" true "$([ "$(group_lag)" != 0 ] && [ "$(group_lag)" != none ] && echo true || echo false)"
+  relaunch_project
+  wait_until "message 2 recorded after the restart" 90 '[ "$(synced ts-k1 2)" -ge 1 ]'
+  fx "/openai/v1/conversations/${k1}/items?order=asc&limit=100"
+  check "after the restart Foundry still holds each message once" "m1,m2" "$(texts)"
+  check "the restarted sync adopted the item instead of sending it again" 1 "$(log_count 'Message adopted conversation=ts-k1 sequence=2')"
+  check "the item map has both rows, with Foundry's own ids" "$(echo "${BODY}" | jq -r '[.data[].id] | join(",")')" "$(sql "SELECT string_agg(foundry_item_id, ',' ORDER BY sequence) FROM camel_history.foundry_item_map WHERE conversation_id='ts-k1'")"
+  printf '%s\n' $'ts-k1\t3\tUserMessageSent\tm3' | publish
+  wait_until "message 3 after the recovery" 60 '[ "$(synced ts-k1 3)" -ge 1 ]'
+  fx "/openai/v1/conversations/${k1}/items?order=asc&limit=100"
+  check "and the conversation goes on in order" "m1,m2,m3" "$(texts)"
+
+  echo "   -- 2. killed while creating a conversation: Foundry made it, the sync never recorded it"
+  store_message ts-k2 1 appUser "c1"
+  local before; before="$(fake_conversations)"
+  fake_fail '{"mode":"late","count":1,"delayMs":25000,"method":"POST"}'
+  printf '%s\n' $'ts-k2\t1\tUserMessageSent\tc1' | publish
+  wait_until "Foundry created the conversation" 40 "[ \"\$(fake_conversations)\" -gt ${before} ]"
+  kill_sync
+  check "the sync recorded no map row" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-k2'")"
+  relaunch_project
+  wait_until "the message synced after the restart" 90 '[ "$(synced ts-k2 1)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-k2)/items?order=asc&limit=100"
+  check "the mapped conversation holds the message once" "c1" "$(texts)"
+  check "ONE ORPHAN is left: the conversation the dead process made (a known limit; foundry-cleanup-orphans.sh removes it)" 1 "$(orphans_of ts-k2)"
+  check "the map names exactly one conversation" 1 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='ts-k2'")"
+
+  echo "   -- 3. killed in the middle of a rebuild"
+  store_message ts-k3 1 appUser "r1"; store_message ts-k3 2 appMaker "r2"; store_message ts-k3 3 appUser "r3"
+  printf '%s\n' $'ts-k3\t1\tUserMessageSent\tr1' $'ts-k3\t3\tUserMessageSent\tr3' | publish
+  wait_until "messages 1 and 3 synced" 60 '[ "$(( $(synced ts-k3 1) + $(synced ts-k3 3) ))" -ge 2 ]'
+  local old; old="$(fid ts-k3)"
+  before="$(fake_conversations)"
+  fake_fail '{"mode":"late","count":1,"delayMs":25000,"method":"POST"}'
+  printf '%s\n' $'ts-k3\t2\tAgentMessageSent\tr2\tagent' | publish      # a late message: the conversation must be rebuilt
+  wait_until "the rebuild created the new conversation" 40 "[ \"\$(curl -s http://localhost:8098/__state | jq -r '.items | length')\" -ge 0 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8098/api/projects/fake/openai/v1/conversations/${old} -H 'Authorization: Bearer t')\" = 404 ]"
+  kill_sync
+  check "the old Foundry conversation was already deleted by the rebuild" 404 "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8098/api/projects/fake/openai/v1/conversations/${old}" -H 'Authorization: Bearer t')"
+  check "but the map still points at it" "${old}" "$(fid ts-k3)"
+  relaunch_project
+  wait_until "the rebuild finished after the restart" 90 '[ "$(log_count "Conversation rebuilt conversation=ts-k3")" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-k3)/items?order=asc&limit=100"
+  check "the rebuilt conversation holds all three, in order" "r1,r2,r3" "$(texts)"
+  check "the item map has three rows" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-k3'")"
+  check "the half-built conversation of the dead process is an orphan" 1 "$(orphans_of ts-k3)"
+  check "nothing was dead-lettered through any of this" 0 "$(dlq_new)"
+}
+
+
+section_real401() {
+  echo "== real401: a REAL 401 from Foundry makes the sync ask the broker again, and nothing is lost"
+  if [ "${FOUNDRY_MODE}" != real ]; then echo "   (only against the real Foundry: skipped with the fake)"; return 0; fi
+  docker rm -f foundry-token-flaky >/dev/null 2>&1 || true
+  docker run -d --name foundry-token-flaky --network yape-local -v "${REPO_DIR}/scripts/lib/flaky-broker.py:/app/flaky.py:ro" \
+    python:3.13-alpine python -u /app/flaky.py >/dev/null
+  sleep 2
+  EXTRA_ENV=("APP_FOUNDRY_TOKENURL=http://foundry-token-flaky:8099/token")
+  relaunch_project
+  store_message ts-r4 1 appUser "token malo primero"
+  printf '%s\n' $'ts-r4\t1\tUserMessageSent\ttoken malo primero' | publish
+  wait_until "the message synced after the real 401" 90 '[ "$(synced ts-r4 1)" -ge 1 ]'
+  check "Foundry really answered 401 to the junk token" true "$([ "$(log_count 'Foundry answered 401')" -ge 1 ] && echo true || echo false)"
+  check "the sync asked the broker again (two tokens served)" 2 "$(docker exec foundry-token-flaky python -c "import urllib.request,json; print(json.load(urllib.request.urlopen('http://localhost:8099/stats'))['n'])")"
+  fx "/openai/v1/conversations/$(fid ts-r4)/items?order=asc&limit=100"
+  check "the message is in Foundry exactly once" "token malo primero" "$(texts)"
+  check "no dead-letter line for it" 0 "$(log_text | grep -c 'DLQ reason=.*ts-r4' || true)"
+  docker rm -f foundry-token-flaky >/dev/null 2>&1 || true
+  EXTRA_ENV=()
 }
 
 section_rebuild() {
@@ -351,7 +473,7 @@ section_broker() {
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}-b" >/dev/null 2>&1 || true
 }
 
-ALL_SECTIONS="base receive first order wait reconcile rebuild errors broker"
+ALL_SECTIONS="base receive first order wait reconcile rebuild errors broker crash real401"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then

@@ -121,12 +121,17 @@ START="$(python3 -I -c 'import time; print(int(time.time()*1000))')"; req "${FAK
 ELAPSED=$(( $(python3 -I -c 'import time; print(int(time.time()*1000))') - START ))
 check "slow still serves the request" 200 "${STATUS}"; check "slow takes the delay" true "$([ "${ELAPSED}" -ge 750 ] && echo true || echo false)"
 req "${FAKE}" tok POST /openai/v1/conversations '{}'; CF="$(echo "${BODY}" | jq -r .id)"
+ctl /__fail '{"mode":"late","count":1,"delayMs":1500}' >/dev/null
+START="$(python3 -I -c 'import time; print(int(time.time()*1000))')"; req "${FAKE}" tok POST "/openai/v1/conversations/${CF}/items" "{\"items\":[$(msg user held)]}"
+ELAPSED=$(( $(python3 -I -c 'import time; print(int(time.time()*1000))') - START ))
+check "late: the answer comes after the delay" true "$([ "${ELAPSED}" -ge 1400 ] && echo true || echo false)"
+check "late: and the item was applied" 1 "$(curl -s http://localhost:8098/__state | jq -r ".items[\"${CF}\"]")"
 ctl /__fail '{"mode":"drop","count":1}' >/dev/null
 req "${FAKE}" tok POST "/openai/v1/conversations/${CF}/items" "{\"items\":[$(msg user once)]}"
 check "drop: the caller gets no answer" 000 "${STATUS}"
-check "drop: but Foundry applied the item" 1 "$(curl -s http://localhost:8098/__state | jq -r ".items[\"${CF}\"]")"
+check "drop: but Foundry applied the item" 2 "$(curl -s http://localhost:8098/__state | jq -r ".items[\"${CF}\"]")"
 req "${FAKE}" tok POST "/openai/v1/conversations/${CF}/items" "{\"items\":[$(msg user once)]}"
-check "a plain retry after a drop duplicates (the reason the sync reconciles)" 2 "$(curl -s http://localhost:8098/__state | jq -r ".items[\"${CF}\"]")"
+check "a plain retry after a drop duplicates (the reason the sync reconciles)" 3 "$(curl -s http://localhost:8098/__state | jq -r ".items[\"${CF}\"]")"
 ctl /__reset >/dev/null
 
 summary

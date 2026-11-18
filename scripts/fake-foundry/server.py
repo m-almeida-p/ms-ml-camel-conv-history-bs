@@ -7,12 +7,14 @@ items per request, `after`/`before` relative to the listing order, 404 after a d
 bad token. State is in memory.
 
 Faults (control calls, not part of the real API):
-    POST /__fail   {"mode": "429"|"500"|"400"|"401"|"slow"|"drop", "count": N (default 1; -1 = until reset), "delayMs": N,
+    POST /__fail   {"mode": "429"|"500"|"400"|"401"|"slow"|"drop"|"late", "count": N (default 1; -1 = until reset), "delayMs": N,
                     "method": "GET"|"POST"|"DELETE" (optional: only requests with that method are affected and counted)}
         429/500/400/401  answer that error instead of serving the request
         slow             sleep delayMs, then serve it normally
         drop             APPLY the request, then close the connection without answering: the caller sees a failure
                          although Foundry did the work (the crash window the sync's reconciliation must survive)
+        late             APPLY the request, then wait delayMs before answering: a window in which the caller can be
+                         killed (docker kill) with the work done in Foundry and not yet recorded by it
     POST /__reset  forget every conversation and every fault
     GET  /__state  {"conversations": N, "items": {"<conv id>": N}, "fault": {...}}
 """
@@ -182,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self.connection.close()
             return
+        if mode == "late":
+            time.sleep(delay / 1000.0)   # the request is already applied; only the answer is held back
         self._respond(status, payload)
 
     def _control(self, method, path, body):
