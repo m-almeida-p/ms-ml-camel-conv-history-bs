@@ -1,0 +1,40 @@
+- rest:
+    id: restMessages
+    description: GET /v1/conversations/{conversationId}/messages
+    get:
+      - id: getMessages
+        description: List the messages of a conversation
+        path: /v1/conversations/{conversationId}/messages
+        to: direct:messages
+- route:
+    id: routeMessages
+    description: Messages
+    note: "The chat messages of a conversation, oldest first. Docs: conv-history-api.md > Endpoints."
+    nodePrefixId: routeMessages
+    routeConfigurationId: apiErrors
+    from:
+      id: fromMessages
+      description: Called by GET /v1/conversations/{id}/messages
+      uri: direct
+      parameters:
+        name: messages
+      steps:
+        - bean:
+            id: readMessagesRequest
+            description: 1.1 Read and check the request
+            note: "Conversation id, cursor and page size, as the contract says. A bad one is a 400. Docs: conv-history-api.md > Endpoints."
+            ref: apiRequest
+            method: messages
+        - setHeader:
+            id: placeholderContentType
+            description: Placeholder (next slice)
+            name: Content-Type
+            expression:
+              constant:
+                expression: application/json
+        - setBody:
+            id: placeholderBody
+            description: Placeholder body
+            expression:
+              constant:
+                expression: '{"messages":[]}'

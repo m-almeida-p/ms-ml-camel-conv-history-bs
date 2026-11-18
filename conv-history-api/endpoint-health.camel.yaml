@@ -9,7 +9,7 @@
 - route:
     id: routeHealth
     description: Health
-    note: "Answers GET /health. Docs: conv-history-api.md > Endpoints."
+    note: "200 when the database answers, 503 when it does not, as the contract says. Docs: conv-history-api.md > Endpoints."
     nodePrefixId: routeHealth
     from:
       id: fromHealth
@@ -25,9 +25,40 @@
             expression:
               constant:
                 expression: application/json
-        - setBody:
-            id: healthBody
-            description: Body
-            expression:
-              constant:
-                expression: '{"status":"ok"}'
+        - doTry:
+            id: tryDatabase
+            description: 1.1 Ask the database
+            note: "A SELECT 1. Docs: conv-history-api.md > Endpoints."
+            steps:
+              - to:
+                  id: selectOne
+                  description: SELECT 1
+                  uri: sql
+                  parameters:
+                    dataSource: "#pgDataSource"
+                    query: SELECT 1
+              - setBody:
+                  id: healthOk
+                  description: Body ok
+                  expression:
+                    constant:
+                      expression: '{"status":"ok"}'
+            doCatch:
+              - id: catchDatabaseDown
+                description: Database down
+                exception:
+                  - java.lang.Exception
+                steps:
+                  - setHeader:
+                      id: healthUnavailableCode
+                      description: Status 503
+                      name: CamelHttpResponseCode
+                      expression:
+                        constant:
+                          expression: "503"
+                  - setBody:
+                      id: healthUnavailable
+                      description: Body unavailable
+                      expression:
+                        constant:
+                          expression: '{"status":"unavailable"}'

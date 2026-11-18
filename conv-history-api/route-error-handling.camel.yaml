@@ -1,0 +1,62 @@
+- routeConfiguration:
+    id: apiErrors
+    # No retries here: the caller waits. Every failure becomes an application/problem+json answer, as in the reference
+    # service. The detail of a 5xx never says what failed; the log does.
+    onException:
+      # A request the API refuses: a bad parameter, an unknown cursor, a conversation with no messages.
+      - onException:
+          id: onApiProblem
+          description: Refused request (4xx)
+          note: "The status, type, title and detail come from the exception. Docs: conv-history-api.md > Errors."
+          exception:
+            - org.apache.camel.ValidationException
+          redeliveryPolicy:
+            maximumRedeliveries: "0"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - bean:
+                id: answerWithProblem4xx
+                description: Answer with the problem
+                ref: problem
+                method: respond
+      # Foundry, the token broker or the database cannot answer: 503, try again.
+      - onException:
+          id: onUnavailable
+          description: Dependency down (503)
+          note: "Foundry, the token broker or the database did not answer. Docs: conv-history-api.md > Errors."
+          exception:
+            - java.io.IOException
+            - java.io.UncheckedIOException
+            - org.springframework.dao.DataAccessResourceFailureException
+            - org.springframework.jdbc.CannotGetJdbcConnectionException
+          redeliveryPolicy:
+            maximumRedeliveries: "0"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - bean:
+                id: answerWithProblem503
+                description: Answer with the problem
+                ref: problem
+                method: respond
+      # Anything else is a bug: 500, and the log has the stack.
+      - onException:
+          id: onUnexpected
+          description: Unexpected failure (500)
+          note: "A bug or data nobody foresaw. The log has the stack; the answer says nothing. Docs: conv-history-api.md > Errors."
+          exception:
+            - java.lang.Exception
+          redeliveryPolicy:
+            maximumRedeliveries: "0"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - bean:
+                id: answerWithProblem500
+                description: Answer with the problem
+                ref: problem
+                method: respond

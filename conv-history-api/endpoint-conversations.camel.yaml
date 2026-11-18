@@ -1,0 +1,40 @@
+- rest:
+    id: restConversations
+    description: GET /v1/conversations
+    get:
+      - id: getConversations
+        description: List the conversations of an account
+        path: /v1/conversations
+        to: direct:conversations
+- route:
+    id: routeConversations
+    description: Conversations
+    note: "The conversations of an account, most recent first. Docs: conv-history-api.md > Endpoints."
+    nodePrefixId: routeConversations
+    routeConfigurationId: apiErrors
+    from:
+      id: fromConversations
+      description: Called by GET /v1/conversations
+      uri: direct
+      parameters:
+        name: conversations
+      steps:
+        - bean:
+            id: readConversationsRequest
+            description: 1.1 Read and check the request
+            note: "Account, cursor and page size, as the contract says. A bad one is a 400. Docs: conv-history-api.md > Endpoints."
+            ref: apiRequest
+            method: conversations
+        - setHeader:
+            id: placeholderContentType
+            description: Placeholder (next slice)
+            name: Content-Type
+            expression:
+              constant:
+                expression: application/json
+        - setBody:
+            id: placeholderBody
+            description: Placeholder body
+            expression:
+              constant:
+                expression: '{"conversations":[]}'
