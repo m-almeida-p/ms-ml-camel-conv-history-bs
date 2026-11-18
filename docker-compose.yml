@@ -77,6 +77,28 @@ services:
       retries: 20
     networks: [yape-local]
 
+  # Gives the Camel projects a Microsoft Foundry token over the network, so no secret goes in a Karavan project
+  # (Karavan keeps project files in Git, and a container it starts receives no environment of its own).
+  # Reads only the three FOUNDRY_* variables from .env. Not published on the host. Not labelled for Karavan, so it
+  # does not show in its Containers tab. Source: scripts/foundry-token-broker/server.py.
+  foundry-token:
+    image: python:3.13-alpine
+    container_name: foundry-token
+    restart: unless-stopped
+    environment:
+      FOUNDRY_TENANT_ID: ${FOUNDRY_TENANT_ID:-}
+      FOUNDRY_CLIENT_ID: ${FOUNDRY_CLIENT_ID:-}
+      FOUNDRY_CLIENT_SECRET: ${FOUNDRY_CLIENT_SECRET:-}
+    volumes:
+      - ./scripts/foundry-token-broker/server.py:/app/server.py:ro
+    command: ["python", "-u", "/app/server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8099/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [yape-local]
+
   registry:
     image: registry:2
     container_name: karavan-registry
