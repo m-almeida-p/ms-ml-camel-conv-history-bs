@@ -12,8 +12,10 @@ import org.apache.camel.Exchange;
  * Reads and checks the parameters of a request, as the contract says, and leaves the result in exchange properties.
  *
  * The query is read from the raw query string, not from the headers Camel makes of it: that shows a parameter sent
- * twice, and an empty one, as they were sent. The headers called page[before], page[after] and page[size] are removed
- * at once, because a header name with square brackets makes the HTTP layer fail the response, an error answer included.
+ * twice, and an empty one, as they were sent. Then every header the request brought (the query parameters Camel turned into
+ * headers, and the client's own) is removed, because the HTTP layer sends the message's headers back on the response: it
+ * echoed them to the client, and failed the whole response (a plain 500) when one held a line break or a NUL, or had
+ * square brackets in its name. Only Camel's own headers (Camel*) stay.
  *
  * Properties set: direction (newest, before or after), size and limit (size + 1, to know whether more exist), plus
  *   conversations: account, cursorMicros, cursorId        messages: conversationId, cursorSequence
@@ -59,12 +61,12 @@ public class ApiRequest {
 
     /** GET /v1/conversations/{conversationId}/messages?page[before]=&page[after]=&page[size]= */
     public void messages(Exchange exchange) throws ApiProblemException {
+        String conversationId = exchange.getMessage().getHeader("conversationId", String.class);   // the path parameter, a header too
         Map<String, List<String>> query = takeQuery(exchange);
         String before = once(exchange, query, "page[before]");
         String after = once(exchange, query, "page[after]");
         String size = once(exchange, query, "page[size]");
 
-        String conversationId = exchange.getMessage().getHeader("conversationId", String.class);
         if (conversationId == null || !IDENTIFIER.matcher(conversationId).matches()) {
             throw ApiProblemException.invalidRequest(exchange, "the conversation id is malformed");
         }
@@ -102,7 +104,7 @@ public class ApiRequest {
         }
     }
 
-    /** The query as sent: every value of every name, decoded. Removes the page[...] headers. */
+    /** The query as sent: every value of every name, decoded. Removes every header that is not Camel's. */
     private static Map<String, List<String>> takeQuery(Exchange exchange) {
         String raw = exchange.getMessage().getHeader(Exchange.HTTP_QUERY, String.class);
         Map<String, List<String>> query = new LinkedHashMap<>();
@@ -117,7 +119,7 @@ public class ApiRequest {
                 query.computeIfAbsent(name, k -> new ArrayList<>()).add(value);
             }
         }
-        exchange.getMessage().removeHeaders("page*");
+        exchange.getMessage().removeHeaders("*", "Camel*");
         return query;
     }
 

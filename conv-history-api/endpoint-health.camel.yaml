@@ -18,6 +18,12 @@
       parameters:
         name: health
       steps:
+        - removeHeaders:
+            id: healthDropRequestHeaders
+            description: Drop the request's headers
+            note: "The HTTP layer sends the message's headers back on the response, so the request's would be echoed. Docs: conv-history-api.md > Endpoints."
+            pattern: "*"
+            excludePattern: "Camel*"
         - setHeader:
             id: healthContentType
             description: Content type

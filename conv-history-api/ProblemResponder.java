@@ -83,8 +83,7 @@ public class ProblemResponder {
         body.put("detail", detail);
 
         Message message = exchange.getMessage();
-        message.removeHeaders("page*");   // a header name with [ ] makes the HTTP layer fail the response
-        message.removeHeader("Link");
+        message.removeHeaders("*", "Camel*");   // the request's headers would go back on the response, and a bad one fails it
         message.setHeader(Exchange.HTTP_RESPONSE_CODE, status);
         message.setHeader(Exchange.CONTENT_TYPE, "application/problem+json");
         message.setBody(JSON.writeValueAsString(body));

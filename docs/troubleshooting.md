@@ -426,6 +426,14 @@ class, and the `onException` rules name that class.
 **Cause:** camel-sql binds `:#name` from the body and then from **headers**, so a route that put values in headers sent them to the client.
 **Fix:** put them in exchange properties and bind with `:#${exchangeProperty.name}`.
 
+### A request with `%0A`, `%00` or `[` in a query answers a plain-text `500 Internal Server Error`, and nothing is in the log
+**Cause:** `platform-http` sends the message's headers back on the response and Camel makes a header of every query parameter; Vert.x
+refuses a line break or NUL in a header value (or brackets in a name) and answers 500 itself. It also echoed `X-Custom: hello` and
+`idYapeAccount: a` back to the client.
+**Fix:** remove every header that is not Camel's once the request is read: `removeHeaders("*", "Camel*")` (`ApiRequest`,
+`ProblemResponder`, and the first step of the health route). Check: `curl -si 'localhost:8086/health?x=a%0Ab' -H 'X-Custom: hello'`
+must be a 200 whose headers do not include `X-Custom` or `x`.
+
 ### The API list does not show a conversation that exists
 **Cause:** only conversations that are in Foundry are listed, and the sync has not sent it yet. Same for a message: it is not served
 until it is in Foundry.

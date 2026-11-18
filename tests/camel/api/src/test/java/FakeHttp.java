@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 /**
  * A real HTTP server on a free local port, for the tests of the classes that call another service (the token broker and
@@ -32,6 +33,7 @@ final class FakeHttp implements AutoCloseable {
 
     private final HttpServer server;
     private final Map<String, Answer> answers = new ConcurrentHashMap<>();
+    private final Map<String, Function<Seen, Answer>> dynamic = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> counts = new ConcurrentHashMap<>();
     private final List<Seen> seen = new CopyOnWriteArrayList<>();
 
@@ -50,6 +52,11 @@ final class FakeHttp implements AutoCloseable {
         answers.put(path, answer);
     }
 
+    /** An answer worked out from the request, for a fake that has to behave (page, order, cursor). */
+    void answerWith(String path, Function<Seen, Answer> answer) {
+        dynamic.put(path, answer);
+    }
+
     int calls(String path) {
         AtomicInteger n = counts.get(path);
         return n == null ? 0 : n.get();
@@ -63,7 +70,9 @@ final class FakeHttp implements AutoCloseable {
         String path = exchange.getRequestURI().getPath();
         counts.computeIfAbsent(path, k -> new AtomicInteger()).incrementAndGet();
         seen.add(new Seen(path, exchange.getRequestURI().getRawQuery(), exchange.getRequestHeaders().getFirst("Authorization")));
-        Answer answer = answers.getOrDefault(path, Answer.status(404));
+        Seen request = seen.get(seen.size() - 1);
+        Function<Seen, Answer> compute = dynamic.get(path);
+        Answer answer = compute != null ? compute.apply(request) : answers.getOrDefault(path, Answer.status(404));
         try {
             if (answer.delayMs() > 0) {
                 Thread.sleep(answer.delayMs());

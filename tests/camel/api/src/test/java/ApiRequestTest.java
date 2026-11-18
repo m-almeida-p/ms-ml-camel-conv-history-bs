@@ -98,6 +98,30 @@ class ApiRequestTest {
     }
 
     @Test
+    void everyHeaderThatIsNotCamelsGoesWhileCamelsOwnStay() throws Exception {
+        Exchange exchange = exchange("idYapeAccount=a", null);
+        exchange.getMessage().setHeader("X-Custom", "hello");
+        exchange.getMessage().setHeader("idYapeAccount", "a");
+        exchange.getMessage().setHeader("Authorization", "Bearer x");
+        exchange.getMessage().setHeader("CamelHttpResponseCode", 200);
+
+        request.conversations(exchange);
+
+        assertEquals(java.util.Set.of(Exchange.HTTP_QUERY, "CamelHttpResponseCode"), exchange.getMessage().getHeaders().keySet(),
+                "what the HTTP layer would send back is only what Camel itself set");
+    }
+
+    @Test
+    void theConversationIdHeaderIsReadBeforeTheHeadersGo() throws Exception {
+        Exchange exchange = exchange(null, "conv_1");
+
+        request.messages(exchange);
+
+        assertEquals("conv_1", exchange.getProperty("conversationId"));
+        assertNull(exchange.getMessage().getHeader("conversationId"));
+    }
+
+    @Test
     void aRefusedListRequestHasRemovedThePageHeadersToo() {
         Exchange exchange = exchange("idYapeAccount=", null);
 

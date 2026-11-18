@@ -23,6 +23,9 @@
 
   <dependencies>
     <dependency><groupId>org.apache.camel</groupId><artifactId>camel-core</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-main</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-platform-http-main</artifactId><version>${camel.version}</version></dependency>
+    <dependency><groupId>org.apache.camel</groupId><artifactId>camel-rest</artifactId><version>${camel.version}</version></dependency>
     <dependency><groupId>org.apache.camel</groupId><artifactId>camel-jackson</artifactId><version>${camel.version}</version></dependency>
     <dependency><groupId>org.apache.camel</groupId><artifactId>camel-sql</artifactId><version>${camel.version}</version></dependency>
     <dependency><groupId>org.apache.camel</groupId><artifactId>camel-platform-http-vertx</artifactId><version>${camel.version}</version></dependency>

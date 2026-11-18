@@ -85,8 +85,13 @@ The errors never retry: the caller waits. The detail of a 5xx never says what fa
 **The 404 and 405 of unknown paths** are Camel's own HTML and empty answers by default. `ProblemHandlers.java` puts problem+json in
 their place on the router that `platform-http` uses.
 
-**A header name with square brackets** makes the HTTP layer fail the response, so a query parameter called `page[before]` would turn
-every answer, an error included, into a 500. `ApiRequest` reads the query from the raw string and removes those headers at once.
+**The request's headers** go back on the response unless they are removed: `platform-http` copies the message's headers to it, and
+Camel turns every query parameter into a header. Two things followed. The API echoed the client's own headers (`X-Custom`,
+`X-Api-Key`, ...) and its query parameters (`idYapeAccount: a`). And the HTTP layer fails the whole response, with a plain-text
+500, when a header holds a line break or a NUL (`?x=a%0Ab`) or has square brackets in its name (`page[before]`), an error answer
+included. `ApiRequest`, `ProblemResponder` and the first step of the health route remove every header that is not Camel's
+(`Camel*`), after `ApiRequest` has read the query from the raw string. The tests that found it are in
+`tests/camel/api/src/test/java/ApiRoutesTest.java` (`theResponseDoesNotEchoTheRequestsHeadersOrItsQueryParameters` and three more).
 
 ## Differences from the reference service
 
