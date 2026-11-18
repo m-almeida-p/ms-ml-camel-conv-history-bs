@@ -1,0 +1,16 @@
+- route:
+    id: routeReceive
+    description: Receive Route
+    nodePrefixId: routeReceive
+    from:
+      id: fromKafkaReceive
+      uri: kafka
+      parameters:
+        topic: yape.public.conversation_events
+        brokers: kafka:29092
+        groupId: ms-ml-camel-conv-history-bs
+        autoOffsetReset: earliest
+      steps:
+        - log:
+            id: logReceived
+            message: "Received kafka message topic=${header.CamelKafkaTopic} partition=${header.CamelKafkaPartition} offset=${header.CamelKafkaOffset} key=${header.CamelKafkaKey} timestamp=${header.CamelKafkaTimestamp} bodyBytes=${bodyAs(String).length()} body=${bodyAs(String)}"
