@@ -1,0 +1,9 @@
+services:
+  conv-history-sync:
+    container_name: conv-history-sync
+    image: conv-history-sync
+    restart: always
+    ports:
+      - "8084:8080"
+    networks:
+      - karavan
