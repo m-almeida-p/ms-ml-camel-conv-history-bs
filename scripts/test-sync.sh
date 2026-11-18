@@ -21,6 +21,7 @@ KAFKA=(docker exec -i yape-kafka)
 
 FOUNDRY_MODE="${FOUNDRY_MODE:-fake}"   # fake: the fake Foundry (default) | real: the Foundry project of .env
 STARTED=0
+EXTRA_ENV=()   # more NAME=value pairs for the project container (a section may restart the project with them)
 
 require_docker
 require_cluster_network
@@ -40,6 +41,7 @@ cleanup() {
        DELETE FROM camel_history.conversation_messages WHERE conversation_id LIKE 'ts-%'" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --delete --topic "${TOPIC}" >/dev/null 2>&1 || true
   "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}" >/dev/null 2>&1 || true
+  docker start foundry-token >/dev/null 2>&1 || true   # the broker section stops it
 }
 trap cleanup EXIT
 
@@ -89,7 +91,7 @@ start_project() {
   fi
   echo "🚀  starting ${PROJECT} (the first start downloads dependencies, about a minute)"
   "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC}" "APP_KAFKA_GROUPID=${GROUP}" "APP_FOUNDRY_ENDPOINT=${endpoint}" \
-    "APP_SYNC_PROJECTIONWAITSECONDS=${PROJECTION_WAIT:-6}" >/dev/null
+    "APP_SYNC_PROJECTIONWAITSECONDS=${PROJECTION_WAIT:-6}" "APP_FOUNDRY_TIMEOUTMS=${FOUNDRY_TIMEOUT_MS:-2000}" ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} >/dev/null
   for _ in $(seq 1 120); do
     [ "$(log_count 'Successfully joined group')" -gt 0 ] && return 0
     if [ "$(log_count 'Error starting Camel|FailedToCreateRoute|Compilation error')" -gt 0 ]; then
@@ -301,7 +303,73 @@ section_rebuild() {
   check "nothing was dead-lettered in this section" 0 "$(dlq_new)"
 }
 
-ALL_SECTIONS="base receive first order wait reconcile rebuild"
+retries_for() { log_count "Failed delivery.*$1"; }
+
+section_errors() {
+  echo "== errors: a Foundry that is down or slow is waited for; a refusal is dead-lettered and the partition goes on"
+  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (needs the fake Foundry's faults: skipped with FOUNDRY_MODE=real)"; return 0; fi
+  dlq_mark
+  local mode n
+  for mode in 429 500 401; do
+    n=$((n + 1)); local c="ts-e${n}"
+    echo "   -- Foundry answers ${mode} three times to the call that creates a conversation"
+    store_message "${c}" 1 appUser "hola ${mode}"
+    fake_fail "{\"mode\":\"${mode}\",\"count\":3,\"method\":\"POST\"}"
+    printf '%s\n' "${c}"$'\t1\tUserMessageSent\t'"hola ${mode}" | publish
+    wait_until "${c} synced after the retries" 90 "[ \"\$(synced ${c} 1)\" -ge 1 ]"
+    fx "/openai/v1/conversations/$(fid "${c}")/items?order=asc&limit=100"
+    check "${mode}: the message is in Foundry exactly once" "hola ${mode}" "$(texts)"
+    check "${mode}: one conversation in the map" 1 "$(sql "SELECT count(*) FROM camel_history.foundry_conversation_map WHERE conversation_id='${c}'")"
+    check "${mode}: the retries are in the log" true "$([ "$(retries_for "Foundry answered ${mode}")" -ge 3 ] && echo true || echo false)"
+  done
+  check "none of that went to the dead-letter log" 0 "$(dlq_new)"
+
+  echo "   -- Foundry refuses a message for good (400), and the next message of the conversation still goes through"
+  store_message ts-e4 1 appUser "refusado"; store_message ts-e4 2 appMaker "sigue"
+  fake_fail '{"mode":"400","count":1,"method":"POST"}'
+  printf '%s\n' $'ts-e4\t1\tUserMessageSent\trefusado' $'ts-e4\t2\tAgentMessageSent\tsigue\tagent' | publish
+  wait_until "the message behind the refused one synced" 90 '[ "$(synced ts-e4 2)" -ge 1 ]'
+  check "one dead-letter line" 1 "$(dlq_new)"
+  check_contains "with the reason" "DLQ reason=foundry-rejected field=http-400" "$(log_text | grep 'DLQ reason=foundry-rejected' | tail -1)"
+  check_contains "and the body, to replay it" "refusado" "$(log_text | grep 'DLQ reason=foundry-rejected' | tail -1)"
+  fx "/openai/v1/conversations/$(fid ts-e4)/items?order=asc&limit=100"
+  check "Foundry holds only the message that was not refused" "sigue" "$(texts)"
+  check "the refused message has no item row" 0 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-e4' AND sequence=1")"
+
+  echo "   -- Foundry is slower than the timeout (${FOUNDRY_TIMEOUT_MS:-2000} ms) on a read"
+  store_message ts-e5 1 appUser "p1"; store_message ts-e5 2 appMaker "p2"
+  printf '%s\n' $'ts-e5\t1\tUserMessageSent\tp1' | publish
+  wait_until "ts-e5 first message synced" 60 '[ "$(synced ts-e5 1)" -ge 1 ]'
+  fake_fail '{"mode":"slow","count":1,"delayMs":4500,"method":"GET"}'
+  printf '%s\n' $'ts-e5\t2\tAgentMessageSent\tp2\tagent' | publish
+  wait_until "ts-e5 second message synced after the timeout" 90 '[ "$(synced ts-e5 2)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-e5)/items?order=asc&limit=100"
+  check "the timeout was retried and nothing was duplicated" "p1,p2" "$(texts)"
+  check "the timeout is in the log" true "$([ "$(retries_for 'did not answer GET')" -ge 1 ] && echo true || echo false)"
+}
+
+section_broker() {
+  echo "== broker: with the token broker down the sync waits, and goes on when it is back"
+  if [ "${FOUNDRY_MODE}" != fake ]; then echo "   (skipped with FOUNDRY_MODE=real)"; return 0; fi
+  dlq_mark
+  store_message ts-b1 1 appUser "con el broker caido"
+  docker stop foundry-token >/dev/null
+  # a fresh start: the new container has no cached token and must ask the broker
+  "${REPO_DIR}/scripts/devmode-local.sh" "${PROJECT}" "APP_TOPIC=${TOPIC}" "APP_KAFKA_GROUPID=${GROUP}-b" "APP_FOUNDRY_ENDPOINT=${FAKE_ENDPOINT}" \
+    "APP_SYNC_PROJECTIONWAITSECONDS=6" "APP_FOUNDRY_TIMEOUTMS=2000" >/dev/null
+  for _ in $(seq 1 90); do [ "$(log_count 'Successfully joined group')" -gt 0 ] && break; sleep 2; done
+  printf '%s\n' $'ts-b1\t1\tUserMessageSent\tcon el broker caido' | publish
+  wait_until "the broker failure retried" 60 '[ "$(retries_for "the token broker did not answer")" -ge 2 ]'
+  check "nothing is sent while there is no token" 0 "$(synced ts-b1 1)"
+  compose up -d foundry-token >/dev/null 2>&1
+  wait_until "the message synced once the broker is back" 90 '[ "$(synced ts-b1 1)" -ge 1 ]'
+  fx "/openai/v1/conversations/$(fid ts-b1)/items?order=asc&limit=100"
+  check "it is in Foundry exactly once" "con el broker caido" "$(texts)"
+  check "no dead-letter line" 0 "$(dlq_new)"
+  "${KAFKA[@]}" kafka-consumer-groups --bootstrap-server kafka:29092 --delete --group "${GROUP}-b" >/dev/null 2>&1 || true
+}
+
+ALL_SECTIONS="base receive first order wait reconcile rebuild errors broker"
 WANTED="${*:-${ALL_SECTIONS}}"
 case " ${WANTED} " in *" base "*) section_base ;; esac
 if [ "${WANTED}" != "base" ]; then
