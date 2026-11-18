@@ -3,7 +3,7 @@
     description: GET /v1/conversations
     get:
       - id: getConversations
-        description: List the conversations of an account
+        description: List an account's conversations
         path: /v1/conversations
         to: direct:conversations
 - route:

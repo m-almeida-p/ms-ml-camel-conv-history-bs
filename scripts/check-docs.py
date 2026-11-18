@@ -5,7 +5,8 @@
 
   1. every `Docs: <file> > <Section>` in a note of a Karavan project points to a file in docs/ and to a heading in it;
   2. every Markdown link in README.md, docs/ and the PROJECT.md files resolves: the file exists and so does the #anchor;
-  3. every route and step label that starts with a number is at most 32 characters (the Designer draws 32 and then `...`, measured by opening every route);
+  3. every Designer label (a route or step `description`, numbered or not) is at most 32 characters: the Designer draws 32 and
+     then `...`, measured by opening every route;
   4. every mermaid diagram renders (needs mmdc; skipped with --no-mermaid or when it is not installed).
 """
 import re
@@ -88,17 +89,17 @@ for md in files:
 print(f"   {links} links checked")
 
 # 3. Designer labels ----------------------------------------------------------------------------------------------------------
-print(f"== Designer labels, at most {MAX_LABEL} characters when numbered")
+print(f"== Designer labels, at most {MAX_LABEL} characters")
 labels = 0
 for project in PROJECTS:
     for yaml_file in sorted((ROOT / project).glob("*.camel.yaml")):
         for number, line in enumerate(yaml_file.read_text(encoding="utf-8").splitlines(), 1):
             m = re.match(r"^\s*(?:- )?description: (.+?)\s*$", line)
-            if m and re.match(r"^\d+(\.\d+)* ", m.group(1)):
+            if m:
                 labels += 1
                 if len(m.group(1)) > MAX_LABEL:
                     fail(f"{yaml_file.name}:{number}: '{m.group(1)}' is {len(m.group(1))} characters")
-print(f"   {labels} numbered labels checked")
+print(f"   {labels} labels checked")
 
 # 4. Mermaid ------------------------------------------------------------------------------------------------------------------
 if "--no-mermaid" not in sys.argv:
