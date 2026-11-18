@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.networknt.schema.JsonSchema;
@@ -49,7 +50,8 @@ import org.apache.camel.Message;
 @BindToRegistry("decoder")
 public class ConversationEventDecoder {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /** Strict, like the reference's json.Unmarshal: anything after the top-level value is an error, not ignored. */
+    private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final Pattern IDENTIFIER = Pattern.compile("^[A-Za-z0-9._:-]{1,128}$");
     private static final Pattern FLOW = Pattern.compile("^[a-z][a-z0-9_]{0,63}$");
     private static final Set<String> ACTORS = Set.of("user", "agent", "system");
@@ -122,12 +124,14 @@ public class ConversationEventDecoder {
         }
 
         // 1. wire format
+        boolean framed = false;   // not schemaId >= 0: a header whose id has the top bit set reads as a negative int, and is still a header
         int schemaId = -1;
         byte[] json = value;
         if (value[0] == 0) {
             if (value.length < 5) {
                 throw poison(exchange, "header", "", "the value is shorter than its schema registry header");
             }
+            framed = true;
             schemaId = ByteBuffer.wrap(value, 1, 4).getInt();
             json = Arrays.copyOfRange(value, 5, value.length);
         } else if (requireFraming) {
@@ -140,7 +144,7 @@ public class ConversationEventDecoder {
             return;
         }
 
-        if (schemaId >= 0 && !allowedSchemaIds.contains(schemaId)) {
+        if (framed && !allowedSchemaIds.contains(schemaId)) {
             throw poison(exchange, "schema-id", "", "schema id " + schemaId + " is not one of the allowed ids " + allowedSchemaIds);
         }
 
@@ -155,7 +159,7 @@ public class ConversationEventDecoder {
         }
 
         // 2. the registered schema
-        if (schemaId >= 0) {
+        if (framed) {
             Set<ValidationMessage> errors = schemaFor(schemaId).validate(root);
             if (!errors.isEmpty()) {
                 ValidationMessage first = errors.iterator().next();
