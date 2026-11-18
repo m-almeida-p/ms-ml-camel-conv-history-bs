@@ -123,6 +123,61 @@ and latest offsets can even be equal (retention removed old records).
 `kafka-run-class kafka.tools.GetOffsetShell ... --time -2` (earliest) and
 `--time -1` (latest).
 
+### `Failed delivery ... On delivery attempt: N caught: ...` repeating
+**Cause:** a record failed and the consumer is retrying it. Read the exception after `caught:`.
+- `CannotGetJdbcConnectionException`, `Connection refused`, `schema id N is not available from the schema registry`:
+  a **transient** failure. The consumer retries forever, with a growing wait, and moves on when the database or registry is
+  back. Nothing is lost and nothing is dead-lettered. Fix the dependency.
+- Anything else (`BadSqlGrammarException`, `NullPointerException`, ...): an **unexpected** error. It is tried 3 more times,
+  then dead-lettered with `reason=unexpected` and the exception class in `field=`. A burst of those lines is a bug or a
+  wrong setting (for example a wrong `app.db.url`, which gives `relation ... does not exist`).
+
+### `DLQ reason=unexpected` for every record
+**Cause:** a bug or a setting error that hits all records, such as a missing table or a wrong schema in `app.db.url`.
+**Fix:** correct it, restart the container, then replay the records: their offsets are in the lines, and the group can be
+rewound (see the [cheatsheet](cheatsheet.md#consumer-group-offsets)).
+
+### `Failed to get driver instance for jdbcUrl=...`
+**Cause:** DevMode loads the Postgres driver in its own classloader, where `java.sql.DriverManager` cannot discover it.
+**Fix:** name it: `camel.beans.pgDataSource.driverClassName=org.postgresql.Driver`.
+
+### `ClassNotFoundException: ConversationEventDecoder` at startup
+**Cause:** `camel.beans.<name>=#class:...` is applied before the project's Java files are compiled, so a class from
+those files cannot be found there.
+**Fix:** register the class from inside its file with `@BindToRegistry("name")`, and read settings from the Camel
+properties at first use, not from `camel.beans.*`.
+
+### `ClassNotFoundException: PoisonRecordException` in an `onException`
+**Cause:** an `onException` resolves the exception class by name before the Java files are compiled.
+**Fix:** make the exception extend a built-in class and match that one: `PoisonRecordException extends
+org.apache.camel.ValidationException`, and the route lists `org.apache.camel.ValidationException`. `ValidationException`
+is a checked exception, so methods that throw it declare `throws PoisonRecordException`.
+
+### `Node should have only have 1 key, was: 4 keys: [id,exception,handled,steps]`
+**Cause:** in a `routeConfiguration`, each entry of `onException` must be wrapped as its own `- onException:` node.
+**Fix:** `onException:` → `- onException:` → `id`, `exception`, `handled`, `steps` indented under it.
+
+### `YAML DSL compact notation detected`
+**Cause:** a warning only. A shorthand such as `simple: "..."` or `constant: "true"` was used.
+**Fix:** write it canonically (`simple: {expression: "..."}`), which Karavan's Designer also prefers.
+
+### The log says `Fetching project null files from Platform ... ConnectException`
+**Cause:** printed by `scripts/devmode-local.sh`. The DevMode image tries to download the project from Karavan first, and
+without a Karavan project id it falls back to the folder it was given.
+**Fix:** none needed.
+
+### The local runner starts with `Routes startup (total:0)`
+**Cause:** the project folder was not visible in the container. A folder under the system temp directory is not shared
+with the Docker VM.
+**Fix:** `scripts/devmode-local.sh` copies the project to `.devmode-local/` inside the repo (git-ignored), which is
+shared. If you change the script, keep the copy inside the repo.
+
+### A test script waits forever, or says the consumer did not join the group
+**Cause:** `scripts/common.sh` sets `pipefail`, and `docker logs | grep -q` then fails with a SIGPIPE status even when it
+matches.
+**Fix:** read the output into a variable and match it there (`grep -q ... <<< "$out"`), as `log_has` does in the test
+scripts.
+
 ### `Error getting Pod Events: namespace cannot be null` in Karavan's log
 **Cause:** Karavan's Kubernetes service runs a check that makes no sense when
 running on Docker.
@@ -148,6 +203,12 @@ in the editor, `Cmd+A`, `Cmd+V`. Short edits to a plain value (such as one
 property) type fine.
 Tip: Karavan rewrites long strings as folded blocks (`message: >-`). That is
 equivalent YAML.
+
+### **Upload** does not replace a file that already exists
+**Cause:** Karavan's Upload dialog adds new files and silently ignores one whose name is taken.
+**Fix:** delete the file in the Source tab, then upload it again. `application.properties` and `docker-compose.yaml`
+cannot be deleted in the UI: change `application.properties` in its editor (paste the whole file), or push from Git and
+press **Pull**.
 
 ### My edit in the Designer form did not change the file
 **Cause:** a value set programmatically did not trigger the form's change

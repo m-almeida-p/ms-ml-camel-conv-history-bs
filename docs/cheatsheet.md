@@ -41,6 +41,32 @@ docker exec conv-history-consumer curl -s http://localhost:8080/observe/health
 
 Applying a change = Karavan **Containers** tab → **Stop** → **Delete** → **Run**.
 
+### Dead-letter log and results
+
+```bash
+docker logs conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ reason='      # every poison record
+docker logs conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
+docker logs conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
+
+# What the consumer wrote (schema camel_history), and the original consumer's result next to it
+docker exec yape-postgres psql -U postgres -d postgres -c "
+  SELECT 'camel_history' AS who, (SELECT count(*) FROM camel_history.conversation_inbox) AS inbox,
+         (SELECT count(*) FROM camel_history.conversation_messages) AS messages,
+         (SELECT count(*) FROM camel_history.conversation_summaries) AS summaries
+  UNION ALL
+  SELECT 'public (original)', (SELECT count(*) FROM public.conversation_inbox),
+         (SELECT count(*) FROM public.conversation_messages), (SELECT count(*) FROM public.conversation_summaries)"
+```
+
+### Local runner and tests (no Karavan)
+
+```bash
+./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
+./scripts/devmode-local.sh stop conv-history-consumer
+./scripts/test-consumer.sh        # 35 checks on a throwaway topic (about 1.5 min)
+./scripts/parity-check.sh         # the 96 real events vs the original consumer's tables (about 25 s)
+```
+
 ## Kafka (inside the `yape-kafka` container)
 
 From the host use `localhost:9092`. Inside Docker use `kafka:29092`.

@@ -118,6 +118,14 @@ DevMode containers started by Karavan (such as `conv-history-consumer`) are
 managed from the Karavan UI, not by these scripts. `clean.sh` does not remove
 them.
 
+Development aids (they do not use Karavan; see the [consumer guide](conv-history-consumer.md#change-it)):
+
+| Script | Effect |
+|---|---|
+| `./scripts/devmode-local.sh <project> [NAME=value ...]` | Run a project folder of this repo in the DevMode image, on the cluster network. `stop <project>` removes it. |
+| `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (35 checks). |
+| `./scripts/parity-check.sh` | Compare what the consumer wrote with the original consumer's tables. |
+
 ## Files Karavan generates in a project
 
 When you create a project, Karavan adds template files. For
@@ -125,8 +133,9 @@ When you create a project, Karavan adds template files. For
 
 | File | Notes |
 |---|---|
-| `application.properties` | Camel settings. Two values were changed from the template; see the [consumer guide](conv-history-consumer.md#applicationproperties-changes-from-the-template). |
-| `route-receive.camel.yaml` | The consumer route. |
+| `application.properties` | Camel settings, dependencies, the datasource. Changed from the template; see the [consumer guide](conv-history-consumer.md#applicationproperties-changes-from-the-template). |
+| `route-receive.camel.yaml`, `route-poison-handling.camel.yaml` | The consumer route, and the error rules with the dead-letter route. |
+| `*.java` | Small Java helpers (decoder, store outcome, offset commit). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
 | `docker-compose.yaml` | Generated for the *Deploy* feature. It uses network `karavan` and host port 8081, which do not match this setup. DevMode does not use it; ignore it unless you use Deploy. |
 | `PROJECT.md` | Empty project notes. |
 

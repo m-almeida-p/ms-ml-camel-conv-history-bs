@@ -16,8 +16,9 @@ Guides for the Apache Camel Karavan setup in this repository and for the
 .
 ├── docker-compose.yml          Karavan, its Postgres and an image registry
 ├── .env.example                Settings to copy to .env (git-ignored; holds the GitHub token)
-├── scripts/                    up / stop / start / logs / clean for the Karavan stack
-├── conv-history-consumer/      A Karavan project: Kafka consumer (created and pushed by Karavan)
+├── scripts/                    up / stop / start / logs / clean for the Karavan stack, plus the
+│                               local runner (devmode-local.sh) and the tests (test-consumer.sh, parity-check.sh)
+├── conv-history-consumer/      A Karavan project: the Kafka consumer that builds the conversation history
 └── docs/                       This documentation
 ```
 
