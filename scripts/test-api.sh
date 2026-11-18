@@ -50,7 +50,9 @@ start_project() { # extra NAME=value pairs for the container
 section_skeleton() {
   echo "== skeleton: health, 404 and 405"
   check_contains "Camel started" "started in" "$(log_text | grep 'Apache Camel .* started in')"
-  check "no compact-notation warning in the log" 0 "$(log_text | grep -c 'compact notation' || true)"
+  # Karavan's REST designer only renders a rest verb whose `to` is a plain string, which Camel calls compact notation;
+  # everything else must stay canonical. So a warning is fine for an endpoint-*.camel.yaml file and for nothing else.
+  check "no compact-notation warning outside the endpoint files" 0 "$(log_text | grep 'compact notation' | grep -vc 'endpoint-' || true)"
   call GET /health
   check "GET /health is 200" 200 "${STATUS}"
   check "GET /health is JSON" "application/json" "$(header content-type | cut -d';' -f1)"

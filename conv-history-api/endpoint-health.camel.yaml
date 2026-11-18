@@ -5,10 +5,7 @@
       - id: getHealth
         description: Health
         path: /health
-        to:
-          uri: direct
-          parameters:
-            name: health
+        to: direct:health
 - route:
     id: routeHealth
     description: Health
