@@ -65,7 +65,7 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
 ./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
 ./scripts/devmode-local.sh stop conv-history-consumer
 ./scripts/test-consumer.sh        # 37 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
-./scripts/parity-check.sh         # the 96 real events vs the original consumer's tables (about 25 s)
+./scripts/parity-check.sh --wipe-camel-history   # DESTRUCTIVE: empties camel_history; refuses without the flag (about 25 s)
 ```
 
 ## Kafka (inside the `yape-kafka` container)
@@ -129,7 +129,7 @@ Other targets: `--to-earliest`, `--to-latest`, `--to-offset N` with a single
 
 ## Foundry: the sync, the API and their tools
 
-Containers: `conv-history-sync` (port 8084), `conv-history-api` (port 8086), `foundry-token` (the broker, no published port).
+Containers: `conv-history-consumer` (port 8081), `conv-history-sync` (port 8084), `conv-history-api` (port 8086), `foundry-token` (the broker, no published port). Karavan (9998) and its registry (5555) are on `127.0.0.1` only; the three services are on all interfaces.
 
 ```bash
 docker compose up -d foundry-token                            # the token broker
@@ -138,7 +138,8 @@ docker compose up -d foundry-token                            # the token broker
 
 ./scripts/check-foundry-sync.sh                               # Foundry against camel_history, item by item (read-only)
 ./scripts/oracle-api.sh                                       # the Karavan-run API against SQL on the data, every account
-./scripts/foundry-cleanup-orphans.sh                          # Foundry conversations nobody maps; --delete removes them; --instance NAME for another stack's
+./scripts/foundry-cleanup-orphans.sh                          # Foundry conversations nobody maps; --delete removes them (asks first; --yes does not); --min-age SECONDS (default 600);
+                                                              # --instance NAME for another stack's; --delete refuses an empty map unless --allow-empty-map
 ./scripts/test-e2e.sh                                         # a real producer flow through the whole chain (VPN, agent)
 ```
 
@@ -146,10 +147,11 @@ Tests (each starts the project on throwaway topics, groups and fixtures, and rem
 
 ```bash
 ./scripts/test-fake-foundry.sh        # the fake Foundry matches the real one; its faults work
-./scripts/test-sync.sh                # 120 checks (fake Foundry); also: ./scripts/test-sync.sh reconcile rebuild edge errors
+./scripts/test-sync.sh                # 124 checks (fake Foundry); also: ./scripts/test-sync.sh reconcile rebuild edge errors (+ real401 with FOUNDRY_MODE=real)
 ./scripts/test-api.sh                 # 273 checks; every response is checked against docs/contract/
-./scripts/test-camel.sh               # 372 JUnit tests in a Maven container (api 245, consumer 81, sync 46); one module: ./scripts/test-camel.sh api ApiRoutesTest
-./scripts/test-all.sh                 # every suite, then one table (about 15 min); --offline skips the real Foundry, --e2e adds the real producer flow
+./scripts/test-camel.sh               # 421 JUnit tests in a Maven container (api 265, consumer 81, sync 75); one module: ./scripts/test-camel.sh api ApiRoutesTest
+./scripts/test-all.sh                 # every suite, then one table (about 15 min); --offline skips the real Foundry, --e2e adds the real producer flow,
+                                      # --only camel,sync (names: docs camel broker fake consumer sync api orphans oracle foundry-sync), --stop at the first failure; logs in .test-logs/
 FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same sections on the real Foundry
 ./scripts/fake-foundry.sh start|stop|status                     # the fake, on the Karavan network and on localhost:8098
 ```

@@ -75,10 +75,10 @@ No detail repeats a value the client sent.
 |---|---|---|
 | 400 | `invalid-request` | An account that is missing or malformed (letters, digits, `. _ : -`, up to 128), a malformed conversation id, both cursors, a parameter sent twice, a `page[size]` outside 1 to 100 or not a plain decimal |
 | 400 | `invalid-cursor` | A cursor that is empty, not in the form the API writes, or not a message of this conversation |
-| 404 | `conversation-not-found` | The conversation has no chat messages in Foundry. Also an unknown path or method (`about:blank`) |
+| 404 | `conversation-not-found` | The conversation has no chat messages in Foundry. An unknown path is also a 404 (`about:blank`) |
 | 405 | `about:blank` | A method the path does not accept |
 | 500 | `about:blank` | A bug, or an inconsistency (an item nothing maps). The log has the stack |
-| 503 | `about:blank` | A dependency cannot answer: Foundry (a timeout, 401, 403, 429, 5xx, or a 404 for a conversation we map), the token broker, or the database |
+| 503 | `about:blank` | A dependency cannot answer: Foundry (a timeout, 401, 403, 408, 429, 5xx, or a 404 for a conversation we map), the token broker, or the database |
 
 The errors never retry: the caller waits. The detail of a 5xx never says what failed; the log does.
 
@@ -131,6 +131,7 @@ differently, on purpose:
 | `app.foundry.tokenUrl` | `http://foundry-token:8099/token` | The broker. Not a secret |
 | `app.foundry.endpoint` | empty | Empty: the broker's endpoint. Set it to point at another Foundry |
 | `app.foundry.timeoutMs` | `10000` | How long a call to Foundry or the broker may take; longer is a 503 |
+| `camel.main.shutdownTimeout` | `8` | Seconds Camel waits for requests in flight when the container stops (Docker kills it after 10). Not an `app.*` setting |
 
 ## Test it
 

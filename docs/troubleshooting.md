@@ -321,7 +321,7 @@ safe, and afterwards every file shows a commit time instead of `NEW` or `CHANGED
 **Fix:** `git pull --ff-only`. If you have local commits that Karavan has not
 seen, push them, then press **Pull** in Karavan.
 
-### `docs/` or `scripts/` appear as projects in Karavan
+### `docs/`, `scripts/` or `tests/` appear as projects in Karavan
 **Cause:** Karavan treats each top-level folder of the repository as a project.
 **Fix:** ignore them. Do not push changes into them from Karavan.
 
@@ -362,8 +362,15 @@ shown as code.
 **Cause:** the HTTP layer (Vert.x) copies the request's query parameters into message headers, and later copies message headers
 into the response. A header name with square brackets is rejected, so the response fails, an error answer included. The log shows
 `a header name cannot contain some prohibited characters, such as : page[before]`.
-**Fix:** read the query from `CamelHttpQuery` and remove the `page*` headers **before anything can fail**. `ApiRequest` does it at
-once, and `ProblemResponder` does it again.
+**Fix:** read the query from `CamelHttpQuery` and remove every header that is not Camel's (`removeHeaders("*", "Camel*")`) **before anything
+can fail**. `ApiRequest`, `ProblemResponder` and the first step of the health route do it.
+
+### Run does nothing after I changed a project's `docker-compose.yaml` port to `127.0.0.1:8086:8080`
+**Cause:** Karavan reads the project's compose file when it runs the project, and its parser reads each port as `host:container` numbers.
+Karavan's log has `For input string: "127.0.0.1"` (from `DevModeResource`), and no container is created.
+**Fix:** write the port as `"8086:8080"`. The three services therefore cannot be bound to the loopback from the compose file; use the host's
+firewall or a gateway ([conv-history-api.md](conv-history-api.md#who-can-call-it)). Test a compose change on **one** project before you
+remove the containers of all three.
 
 ### An unknown path is an HTML 404 and a wrong method an empty 405
 **Cause:** that is `platform-http`'s own answer. A catch-all route with `matchOnUriPrefix` does not help: it hides every real endpoint.
@@ -443,6 +450,23 @@ until it is in Foundry.
 **Cause:** it is in the map, but Foundry answered 404 (it no longer has it) or cannot answer. The log says which. A lost conversation
 is rebuilt by the sync with the conversation's next message.
 **Fix:** if Foundry is up, `./scripts/check-foundry-sync.sh` shows what it holds; send nothing by hand.
+
+### `DLQ reason=store-rejected field=sqlstate-22021` (or `22P05`)
+**Cause:** the store refused the data for good. `22021` is a NUL (`\u0000`) in a chat text, which Postgres cannot hold in a `text`; `22P05`
+is a NUL escape inside a `jsonb`. `field=stream-position` is another case: a **different** event arrived at a position that already holds one.
+**Fix:** none is needed for the stream: the record is dead-lettered, its offset moves, nothing is half written. Only the SQLSTATE is logged
+(never the row), so look the record up by its `topic`, `partition` and `offset` in Kafka.
+
+### `DLQ reason=schema-id`
+**Cause:** the record's registry header names a schema id that is not in `app.schema.allowedIds` (default `2`): the producer moved to a new
+schema version, or the header is corrupt (an id with the top bit set reads as negative and is refused too).
+**Fix:** if the new version is intended, add its id to `app.schema.allowedIds` on purpose, recreate the container, and replay the records.
+
+### The sync is evicted from its group, or logs `CommitFailedException`, after an outage
+**Cause:** a poll took longer than `max.poll.interval.ms`. The sync polls 20 records at a time and allows 30 minutes
+(`maxPollRecords`, `maxPollIntervalMs` in `route-receive.camel.yaml`); a record can wait up to ten minutes for the consumer, and a rebuild
+makes one call per message. This was not provoked in testing.
+**Fix:** nothing is lost (a redelivered record is skipped through the item map). If it repeats, lower `maxPollRecords` or raise `maxPollIntervalMs`.
 
 ### I rewound my group to the earliest offset and nothing came back
 **Cause:** the topic's retention removed the old events, so "earliest" is not offset 0 and the old records are gone for good. The

@@ -17,7 +17,7 @@ Five routes, read in order. The numbers are the same in the Designer, in the dia
 | | 2.2 Look up the item map | A row for `(conversation_id, sequence)` proves the message was sent: the inbox of this project. |
 | | 2.3 Repeat | In the map: logged as a repeat, nothing is sent. |
 | | 2.4 Look up the conversation map | Is there a Foundry conversation for it? |
-| | 2.5 New or known | New: 2.5.1.1 create it in Foundry with the first message and our id in its metadata, 2.5.1.2 save both map rows in one statement. Known: 2.5.2 route 4. |
+| | 2.5 New or known | New: 2.5.1.1 create it in Foundry with the first message and its metadata (`conversation_id`, `source=ms-ml-camel-conv-history-bs`, `instance=app.foundry.instance`), 2.5.1.2 save both map rows in one statement. Known: 2.5.2 route 4. |
 | | 2.6 Log the message | `Message synced conversation=… sequence=… foundryConversation=… item=…` |
 | **3 Dead-letter** | 3.1 to 3.3 | Name the reason, write the log, commit. [The dead-letter log](#the-dead-letter-log). |
 | **4 Append** | 4.1 to 4.6 | Look up the last mapped item and the messages that come next, **add or adopt** (one step), rebuild if Foundry is inconsistent, record the items. [Reconciliation](#reconciliation). |
@@ -41,6 +41,7 @@ In `application.properties`; each can be overridden by an environment variable (
 | `app.foundry.tokenUrl` | `http://foundry-token:8099/token` | The broker. Not a secret |
 | `app.foundry.endpoint` | empty | Empty: the broker's endpoint, from `.env`. Set it to point at another Foundry, for example the fake |
 | `app.foundry.timeoutMs` | `10000` | How long a call to Foundry or the broker may take |
+| `camel.main.shutdownTimeout` | `8` | Seconds Camel waits for a call to Foundry in flight when the container stops (Docker kills it after 10), so "applied but answer lost" is not routine at every deploy. 1 in the consumer, whose steps are database only |
 | `app.sync.projectionWaitSeconds` | `600` | How long to wait (ten minutes) for the history consumer's row, with a `WARN` once a minute while it waits. Past it the record is dead-lettered (`projection-missing`) and its offset moves: see [what it does not do](#what-it-does-not-do) |
 | `app.foundry.instance` | `default` | Which stack made a Foundry conversation (its `metadata.instance`). Give each developer or environment that shares a Foundry project its own, so `foundry-cleanup-orphans.sh --instance NAME` only touches that stack's |
 
@@ -59,17 +60,19 @@ The Kafka endpoint reads at most **20 records per poll** and allows **30 minutes
 | A message whose row the consumer never stored | Waits `projectionWaitSeconds`, then dead-letter log (`projection-missing`) | Moves |
 | Foundry or the broker cannot answer, 429, 5xx, 401, 403, 408, a timeout | **Retried in place, forever** | **Does not move** |
 | Foundry refuses for good (400, 409, 422…) | Dead-letter log (`foundry-rejected`) | Moves |
+| A write that the database refuses for good (SQLSTATE class 22 or 23) | Dead-letter log (`store-rejected`) | Moves |
 | Anything else (a bug) | Retried 3 times, then dead-letter log (`unexpected`) | Moves |
 
 ## Error handling
 
-Three families, written as the exceptions that `route-error-handling.camel.yaml` matches:
+The kinds of failure, written as the exceptions that `route-error-handling.camel.yaml` matches:
 
 | Family | Exception | Rule |
 |---|---|---|
 | Cannot answer, try later | `java.io.IOException` (`FoundryUnavailableException`), and the database's connection failures | Retry in place, forever, the wait doubling from 1 s to 30 s. The partition is held, nothing is skipped. |
 | Refused for good | `org.apache.camel.ValidationException` (`PoisonRecordException`, `FoundryRejectedException`) | No retry. Route 3, then the offset moves. |
 | The consumer's row is not there yet | `java.sql.SQLTransientException` (`ProjectionPendingException`) | Retry once a second for `projectionWaitSeconds` (a `WARN` once a minute), then route 3. |
+| Refused by our own database | `org.springframework.dao.DataIntegrityViolationException` | No retry. `StoreRefusal` names it (`store-rejected`, field `sqlstate-<code>`), route 3, then the offset moves. |
 | Anything else | `java.lang.Exception` | The Dead Letter Channel: 3 retries, then route 3. |
 
 Two Camel behaviours decide how this is built, and both cost a failing test to find:
@@ -95,6 +98,7 @@ DLQ reason=<reason> field=<field> topic=<topic> partition=<n> offset=<n> key=<ke
 | `header`, `no-schema-header`, `schema-id`, `schema-violation`, `json`, `field-missing`, `field-malformed`, `field-range`, `payload`, `metadata`, `occurred-at` | The decoder refused it; same reasons as [conv-history-consumer.md](conv-history-consumer.md) |
 | `projection-missing` | The history consumer did not store this message in time (field `conversation_messages`) |
 | `foundry-rejected` | Foundry refused it with a 4xx; the field is `http-<status>`, the detail the error code and message |
+| `store-rejected` | Our own tables refused the data for good (SQLSTATE class 22 or 23, for example a NUL); the field is `sqlstate-<code>`. Only the code is logged |
 | `unexpected` | A bug: the field is the exception class, the detail its message |
 
 ```bash
@@ -156,7 +160,7 @@ The log says why, at `WARN`: `Rebuilding conversation=… reason=…` and `Conve
 ## Test it
 
 ```bash
-./scripts/test-sync.sh                  # 120 checks: receive, first, order, wait, reconcile, rebuild, edge, errors, broker, crash
+./scripts/test-sync.sh                  # 124 checks: base, receive, first, order, wait, reconcile, rebuild, edge, errors, broker, crash (and real401 with FOUNDRY_MODE=real)
 ./scripts/test-sync.sh reconcile        # one section
 FOUNDRY_MODE=real ./scripts/test-sync.sh first order rebuild    # the same on the real Foundry
 ./scripts/check-foundry-sync.sh         # Foundry against camel_history, item by item (read-only)

@@ -14,7 +14,7 @@ Everything below is explained, with diagrams, in [`docs/design-foundry.md`](../d
 | **2 Sync** | 2.1 Read the stored message, 2.2 Look up the item map, 2.3 Repeat, 2.4 Look up the conversation map, 2.5 New or known conversation, 2.6 Log |
 | **3 Dead-letter** | 3.1 Name the reason, 3.2 Write the log, 3.3 Commit |
 | **4 Append** | 4.1 Find the last mapped item, 4.2 Find the next messages, 4.3 Add or adopt, 4.4 Rebuild or record, 4.5 Record, 4.6 Note an adoption |
-| **5 Rebuild** | 5.1 Log the reason, 5.2 Find the stored messages, 5.3 Build it again in Foundry, 5.4 Replace the maps, 5.5 Log |
+| **5 Rebuild** | 5.1 Log the reason, 5.2 Find the stored messages, 5.3 Build it again in Foundry, 5.4 Replace the maps, 5.5 Delete the old one, 5.6 Log |
 
 Route 1 calls route 2 (step 1.2.2); route 2 calls route 4 (2.5.2); route 4 calls route 5 (4.4.1). A record that cannot be sent goes
 to route 3. In the **Topology** tab: `errorRules` are the error rules and `#pgDataSource` is the database.
@@ -34,8 +34,8 @@ to route 3. In the **Topology** tab: `errorRules` are the error rules and `#pgDa
 | `route-append.camel.yaml` | Route 4 |
 | `route-rebuild.camel.yaml` | Route 5 |
 | `route-error-handling.camel.yaml` | The error rules, and route 3 |
-| `FoundryClient.java` | The calls to Foundry: create, add or adopt, rebuild |
+| `FoundryClient.java` | The calls to Foundry: create, add or adopt, rebuild, delete the replaced conversation |
 | `SyncStore.java` | Reads the stored message, waiting for the history consumer's row |
-| `ConversationEventDecoder.java`, `PoisonRecordException.java`, `OffsetCommit.java` | Copies of the consumer's beans; `scripts/test-sync.sh` fails if they differ |
+| `ConversationEventDecoder.java`, `PoisonRecordException.java`, `OffsetCommit.java`, `StoreRefusal.java` | Copies of the consumer's beans; `scripts/test-sync.sh` fails if they differ |
 | `FoundryUnavailableException.java`, `FoundryRejectedException.java`, `ProjectionPendingException.java` | The three families of failure, each extending a built-in class |
 | `application.properties` | Settings (`app.*`), dependencies, datasource |

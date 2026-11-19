@@ -18,7 +18,7 @@ and the reading map.
 | **map** | The two tables that tie our ids to Foundry's: `foundry_conversation_map` and `foundry_item_map`. The second is also the sync's inbox. |
 | **sync** | Sending each chat message to Foundry once, in order. |
 | **reconcile / adopt** | Looking in Foundry for an item that an earlier, lost call kept, and recording it instead of sending it again. |
-| **rebuild** | Deleting a conversation in Foundry and creating it again from the stored messages. |
+| **rebuild** | Creating the conversation again in Foundry from the stored messages, then deleting the old one once the maps point at the new one. |
 | **orphan** | A Foundry conversation of ours that no map row names. Harmless; `foundry-cleanup-orphans.sh` removes it. |
 | **broker** | `foundry-token`: the service that gives the projects a Foundry token, so no secret goes in a project file. |
 
@@ -159,8 +159,8 @@ flowchart TB
 ```
 
 *In words:* the text and the role come from the stored row, so Foundry holds the very text our table holds. A message already in
-the item map is a repeat and sends nothing. The first message of a conversation creates the Foundry conversation, with our
-conversation id in its metadata, and saves both map rows in one statement.
+the item map is a repeat and sends nothing. The first message of a conversation creates the Foundry conversation, with its
+metadata (our conversation id, the source `ms-ml-camel-conv-history-bs` and the instance), and saves both map rows in one statement.
 
 ### Route 4: add to a conversation Foundry already has
 
@@ -181,7 +181,7 @@ flowchart TB
 
 *In words:* step 4.3 lists the items after the last mapped one and compares them, in order, with the stored messages that
 come next. Those that match are **adopted**: an earlier call that was applied but whose answer was lost left them in Foundry.
-If the message being handled is not among them, it is sent. Looking and sending are **one step**, because Camel retries only
+If the message being handled is not among them, it is sent now, together with every earlier stored message that Foundry does not hold (a skipped record must not become a gap); if Foundry already holds a later one, the conversation is rebuilt. Looking and sending are **one step**, because Camel retries only
 the step that failed. See [Reconciliation](conv-history-sync.md#reconciliation).
 
 ### Route 5: build a conversation again
@@ -235,6 +235,46 @@ bug is a 500.
 ---
 
 ## Level 3: the steps of the API
+
+### Conversations: one page of an account's conversations
+
+```mermaid
+flowchart TB
+    s11["1.1 Read and check the request"]
+    s12{"1.2 Page (Content-Based Router)"}
+    s121["1.2.1 Older than the cursor"]
+    s122["1.2.2 More recent than cursor"]
+    s123["1.2.3 The most recent"]
+    s13["1.3 Build the answer"]
+
+    s11 --> s12
+    s12 -- "before a cursor" --> s121 --> s13
+    s12 -- "after a cursor" --> s122 --> s13
+    s12 -- "no cursor" --> s123 --> s13
+```
+
+*In words:* this route never calls Foundry. It reads `conversation_summaries` joined to `foundry_conversation_map`, so only the
+conversations Foundry holds are listed. The three queries differ only in the cursor test and the order; each reads one row more than
+the page, and that extra row is how step 1.3 knows whether a `Link` is due. The cursor of a conversation is the instant of its last
+message in Unix microseconds, a `~` and its id, so it stays right when the conversation later moves to the top.
+
+### Health
+
+```mermaid
+flowchart TB
+    h0["Drop the request's headers"]
+    h1["Content type"]
+    h2{"1.1 Ask the database"}
+    ok["Body ok: 200"]
+    down["Database down: Status 503, Body unavailable"]
+
+    h0 --> h1 --> h2
+    h2 -- "answers" --> ok
+    h2 -- "does not" --> down
+```
+
+*In words:* a `SELECT 1`. It does not ask Foundry, so the API reports healthy while Foundry is down, and the messages endpoint then
+answers 503. The first step removes the request's headers, like every route of the API ([why](conv-history-api.md#errors)).
 
 ### Messages: one page of a conversation
 
@@ -333,4 +373,4 @@ sequenceDiagram
   class cannot be named in YAML.
 - Settings are `app.*` in `application.properties`, overridable by environment variables; no secret and no Azure resource name
   in a project file.
-- Every route and step has a number, a short label (32 characters at most: the Designer draws 32, then `...`) and, when it needs one, a note ending in `Docs:`.
+- Every route and numbered step has a short label (32 characters at most: the Designer draws 32, then `...`) and, when it needs one, a note ending in `Docs:`.

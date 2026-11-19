@@ -32,5 +32,5 @@ In the **Topology** tab: `{{app.topic}}` is the events topic (a placeholder, res
 | `route-receive.camel.yaml` | Route 1 |
 | `route-store.camel.yaml` | Route 2, with the SQL |
 | `route-error-handling.camel.yaml` | Error rules, and route 3 |
-| `*.java` | The beans of steps 1.1, 1.3, 2.2 and 3.3 |
+| `*.java` | The beans of steps 1.1, 1.3, 2.2 and 3.3, and `StoreRefusal` (names a store refusal in the error rules) |
 | `application.properties` | Settings (`app.*`), dependencies, datasource |

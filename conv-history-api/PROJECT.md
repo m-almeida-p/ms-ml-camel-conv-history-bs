@@ -11,7 +11,7 @@ Everything below is explained, with diagrams, in [`docs/design-foundry.md`](../d
 
 | Endpoint | Route | Steps |
 |---|---|---|
-| `GET /health` | **Health** | 1.1 Ask the database |
+| `GET /health` | **Health** | Drop the request's headers, Content type, 1.1 Ask the database |
 | `GET /v1/conversations` | **Conversations** | 1.1 Read and check the request, 1.2 Page, 1.3 Build the answer |
 | `GET /v1/conversations/{id}/messages` | **Messages** | 1.1 Read and check, 1.2 Find it in Foundry, 1.3 Is it there?, 1.4 Is there a cursor?, 1.5 Read the page from Foundry, 1.6 Build the answer |
 
@@ -29,7 +29,7 @@ when Foundry, the token broker or the database cannot answer, 500 for a bug.
 |---|---|
 | `endpoint-health.camel.yaml`, `endpoint-conversations.camel.yaml`, `endpoint-messages.camel.yaml` | One endpoint each: its `rest` verb and its route, together |
 | `route-error-handling.camel.yaml` | The error rules `apiErrors` |
-| `ApiRequest.java` | Reads and checks the parameters from the raw query string; removes the `page[...]` headers |
+| `ApiRequest.java` | Reads and checks the parameters from the raw query string, then removes every request header that is not Camel's (`Camel*`) |
 | `ApiProblemException.java`, `ProblemResponder.java` | A problem, and the response built from it |
 | `ProblemHandlers.java` | 404 and 405 of unknown paths and methods as problem+json |
 | `ConversationList.java`, `MessagePage.java` | Build the two answers |

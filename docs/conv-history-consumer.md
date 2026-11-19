@@ -41,12 +41,13 @@ The tables live in the schema **`camel_history`** of the cluster's Postgres, apa
 | `ConversationEventDecoder.java` | Schema id check, registry schema validation, contract, projection. |
 | `StoreOutcome.java` | Reads the store statement's result: `stored`, `duplicate`, or a conflict. |
 | `OffsetCommit.java` | Commits the offset by hand (auto commit is off). |
+| `StoreRefusal.java` | Names a store refusal for the dead-letter log: reason `store-rejected`, field `sqlstate-<code>`, found in the cause chain. |
 | `PoisonRecordException.java` | The exception for a record that can never be stored. |
 | `application.properties` | Camel settings, dependencies, the datasource and the `app.*` settings. |
 
-The three helpers are Java files because decoding bytes and validating JSON is clearer in code than in YAML. Each
+The four helpers are Java files because decoding bytes and validating JSON is clearer in code than in YAML. Each
 registers itself with `@BindToRegistry`, so the route refers to them by name (`decoder`, `storeOutcome`,
-`offsetCommit`).
+`offsetCommit`, `storeRefusal`).
 
 ## Settings
 
@@ -63,6 +64,8 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 | `app.schema.requireFraming` | `true` | `false` also accepts plain JSON, as the original does. |
 | `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=camel_history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
+The project's port is `8081` on the host (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
+
 ## Schema assurance
 
 *Designer: step 1.1 Decode.*
@@ -71,7 +74,7 @@ Four layers, in this order. A record that fails any of them is dead-lettered wit
 
 | # | Layer | Catches | Reason |
 |---|---|---|---|
-| 1 | Wire format: the record starts with the Schema Registry header (zero byte + 4-byte schema id), and the id is in `app.schema.allowedIds` | A record not written through the registry; a producer moving to a new schema version without anyone approving it | `no-schema-header`, `header`, `schema-id` |
+| 1 | Wire format: the record starts with the Schema Registry header (zero byte + 4-byte schema id), and the id is in `app.schema.allowedIds` | A record not written through the registry; a producer moving to a new schema version without anyone approving it. An id with the top bit set reads as a negative number and is refused unless it is listed | `no-schema-header`, `header`, `schema-id` |
 | 2 | The JSON Schema the registry holds **for that id** | A wrong type, such as `sequence` sent as a string | `schema-violation` |
 | 3 | Our own contract (below) | Everything the registered schema does not say: it has no `required` list, so it alone would accept a record with no `conversation_id` | `json`, `field-missing`, `field-malformed`, `field-range`, `payload`, `metadata`, `occurred-at` |
 | 4 | The database itself: `CHECK` and `NOT NULL` constraints | The last line of defence | `store-rejected` |
@@ -99,7 +102,7 @@ The rules of the original's decoder, plus `actor`:
 | `payload`, `metadata` | required; JSON (a string holding JSON, as Debezium sends JSONB, or an object) that is an object or array |
 | unknown fields | ignored, so a new column does not break the consumer |
 
-An empty or `null` value (a tombstone) is skipped.
+An empty or `null` value, or a registry header followed by an empty or `null` JSON, is a tombstone and is skipped. A value with anything after the top-level JSON value is refused as `json`, as the original's parser does.
 
 ## Projection: what becomes a message
 
@@ -119,7 +122,7 @@ valid.
 
 *Designer: steps 2.1 Write and 2.2 Decide the outcome.*
 
-`route-receive.camel.yaml` runs a single `WITH` statement, so Postgres applies all or nothing:
+`route-store.camel.yaml` (step 2.1) runs a single `WITH` statement, so Postgres applies all or nothing:
 
 1. insert the event into `conversation_inbox`, `ON CONFLICT (conversation_id, sequence) DO NOTHING`;
 2. if it was new and projectable, upsert the message (`xmax = 0` tells a new row from an update);
@@ -231,7 +234,7 @@ docker logs -f devmode-local-conv-history-consumer
 
 ## Test it
 
-Two scripts, both against the local cluster, both on **throwaway topics** and groups:
+Three scripts, all against the local cluster; the first two use **throwaway topics** and groups:
 
 | Script | What it proves | Time |
 |---|---|---|
@@ -239,7 +242,9 @@ Two scripts, both against the local cluster, both on **throwaway topics** and gr
 | `./scripts/test-camel.sh consumer` | 81 JUnit tests: the decoder at the edges of every field (66, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
 | `./scripts/parity-check.sh` | Replays the 96 rows of `public.conversation_events` as Debezium would, and compares the three `camel_history` tables with the original consumer's `public` tables, every column, both directions. | about 25 s |
 
-Both truncate the `camel_history` tables. They never write to the real topic or to the `public` tables.
+`test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
+**`parity-check.sh` TRUNCATES the three `camel_history` tables (inbox, messages, summaries) before and after**, which would wipe the live history the sync and the API
+serve, so it refuses to run while they hold rows unless you pass `--wipe-camel-history`. None of them writes to the real topic or to the `public` tables.
 
 To publish a fake record to the real topic by hand, remember it needs the Schema Registry header, or it is
 dead-lettered as `no-schema-header`, and **Kafka cannot delete records**: if the original service starts later it reads

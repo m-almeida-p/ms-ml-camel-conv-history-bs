@@ -25,13 +25,14 @@ container on your machine ("DevMode").
  └──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Three services in `docker-compose.yml`:
+Four services in `docker-compose.yml`:
 
 | Service | Image | Purpose | Host port |
 |---|---|---|---|
-| `karavan` | `ghcr.io/apache/camel-karavan:4.22.2` | The designer and its API | 9998 |
+| `karavan` | `ghcr.io/apache/camel-karavan:4.22.2` | The designer and its API | `127.0.0.1:9998` |
 | `karavan-db` | `postgres:18` | Karavan's database. Not published on the host. | none |
-| `registry` | `registry:2` | Local image registry for Karavan builds | 5555 |
+| `registry` | `registry:2` | Local image registry for Karavan builds | `127.0.0.1:5555` |
+| `foundry-token` | `python:3.13-alpine` | The Foundry token broker for the sync and the API ([foundry-setup.md](foundry-setup.md)) | none |
 
 ## Prerequisites
 
@@ -82,13 +83,13 @@ All in `docker-compose.yml`, service `karavan`:
 
 The mount `/var/run/docker.sock:/var/run/docker.sock` gives Karavan control of
 your Docker engine. That is how it starts containers, and it means **anyone
-who can use the Karavan UI is effectively root on this machine**. Do not expose
-port 9998 beyond localhost.
+who can use the Karavan UI is effectively root on this machine**. Port 9998 is
+published on `127.0.0.1` only; keep it that way.
 
 ## How Karavan and Git work together
 
 - Each **top-level folder** in the repository is a Karavan **project**
-  (`conv-history-consumer/` here). Karavan loads projects from Git at startup
+  (`conv-history-consumer/`, `conv-history-sync/` and `conv-history-api/` here). Karavan loads projects from Git at startup
   and when you press **Pull**.
 - Edits in the UI are saved to Karavan's database first and show status `NEW`
   or *changed*. They are **not in Git** until you push.
@@ -100,7 +101,7 @@ port 9998 beyond localhost.
 - Because state is in Git, `./scripts/clean.sh` is safe: it removes containers
   and the Postgres volume, and the projects come back from Git.
 
-> Folders that are not Karavan projects (`docs/`, `scripts/`) sit in the same
+> Folders that are not Karavan projects (`docs/`, `scripts/`, `tests/`) sit in the same
 > repository. If Karavan lists them as projects after a Pull, ignore them or
 > delete the entry in the UI; do not push changes into them from Karavan.
 
@@ -123,8 +124,9 @@ Development aids (they do not use Karavan; see the [consumer guide](conv-history
 | Script | Effect |
 |---|---|
 | `./scripts/devmode-local.sh <project> [NAME=value ...]` | Run a project folder of this repo in the DevMode image, on the cluster network. `stop <project>` removes it. |
-| `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (37 checks). |
-| `./scripts/parity-check.sh` | Compare what the consumer wrote with the original consumer's tables. |
+| `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (37 checks). It touches only its own `t-` rows. |
+| `./scripts/parity-check.sh --wipe-camel-history` | Compare what the consumer wrote with the original consumer's tables. **Empties the `camel_history` tables**, so it refuses without the flag. |
+| `./scripts/test-all.sh` | Every test of the repository in turn, with one table at the end ([testing.md](testing.md)). |
 
 ## Files Karavan generates in a project
 
@@ -135,9 +137,9 @@ When you create a project, Karavan adds template files. For
 |---|---|
 | `application.properties` | Camel settings, dependencies, the datasource. Changed from the template; see the [consumer guide](conv-history-consumer.md#applicationproperties-changes-from-the-template). |
 | `route-receive.camel.yaml`, `route-store.camel.yaml`, `route-error-handling.camel.yaml` | The three routes: Receive, Store, Dead-letter (with the error rules). |
-| `*.java` | Small Java helpers (decoder, store outcome, offset commit). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
-| `docker-compose.yaml` | Generated for the *Deploy* feature. It uses network `karavan` and host port 8081, which do not match this setup. DevMode does not use it; ignore it unless you use Deploy. |
-| `PROJECT.md` | Empty project notes. |
+| `*.java` | Small Java helpers (decoder, store outcome, offset commit, store refusal). Karavan keeps `.java` files in the project like any other file, and DevMode compiles them at startup. |
+| `docker-compose.yaml` | Karavan reads it when it runs the project: the published port (8081 consumer, 8084 sync, 8086 API) and the container name. The port must be plain `host:container`: Karavan's parser fails on `127.0.0.1:8086:8080` and Run does nothing. Edit the port here, then recreate the container. |
+| `PROJECT.md` | The route table, the key and the file list of the project, shown with it in Karavan (excluded from the run by `camel.jbang.excludes=*.md`). |
 
 The "Kafka" starter also generates `route-processing`, `route-send` and
 `default-error-handler`. They were demo routes unrelated to the consumer and

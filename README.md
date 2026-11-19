@@ -16,7 +16,8 @@ agent -> event store -> Debezium -> Kafka -> consumer -> camel_history
 ## Documentation
 
 See [docs/](docs/README.md): the design with diagrams, Karavan setup, a guide per project, the Foundry setup,
-troubleshooting and a command cheatsheet.
+troubleshooting and a command cheatsheet. **Picking the work up? Start with [docs/handoff.md](docs/handoff.md)**; to run or add a test,
+[docs/testing.md](docs/testing.md) (`./scripts/test-all.sh` runs everything).
 
 Start with [docs/design-foundry.md](docs/design-foundry.md) for the Foundry side and
 [docs/design.md](docs/design.md) for the consumer.
