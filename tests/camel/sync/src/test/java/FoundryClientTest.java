@@ -647,7 +647,7 @@ class FoundryClientTest {
     }
 
     @Test
-    void aRebuildSendsEveryStoredMessageInOrderAndDeletesTheOldConversation() throws Exception {
+    void aRebuildSendsEveryStoredMessageInOrderAndLeavesTheOldConversationUntilItIsToldToDeleteIt() throws Exception {
         String old = foundryHolding("user", "stale");
         Exchange exchange = forRebuild(old, 25);
 
@@ -663,8 +663,36 @@ class FoundryClientTest {
         assertEquals(25, record(exchange, "rebuildJson").size());
         assertEquals(25, exchange.getMessage().getHeader("rebuildLast", Integer.class));
         assertEquals(items.get(24).get("id"), record(exchange, "rebuildJson").get(24).get("itemId"));
-        assertEquals(404, status("GET", "/openai/v1/conversations/" + old), "the old conversation is deleted");
+        assertEquals(200, status("GET", "/openai/v1/conversations/" + old), "the old conversation is not touched while the maps still point at it");
+        assertEquals(2, conversations());
+
+        client.deleteOldConversation(exchange);   // route 5 calls it once the maps point at the new one
+
+        assertEquals(404, status("GET", "/openai/v1/conversations/" + old));
         assertEquals(1, conversations());
+        assertEquals(25, itemsOf(fresh).size(), "and the new one is intact");
+    }
+
+    @Test
+    void deletingTheOldConversationIsHarmlessWhenItIsGoneWhenThereIsNoneOrItIsTheNewOne() throws Exception {
+        String old = foundryHolding("user", "stale");
+        status("DELETE", "/openai/v1/conversations/" + old);
+        Exchange gone = forRebuild(old, 2);
+        client.rebuild(gone);
+        client.deleteOldConversation(gone);   // a 404: fine
+        client.deleteOldConversation(gone);   // and again
+
+        Exchange none = forRebuild(null, 1);
+        client.rebuild(none);
+        client.deleteOldConversation(none);   // no old row: nothing to do
+
+        Exchange same = forRebuild(null, 1);
+        client.rebuild(same);
+        same.getMessage().setHeader("convMapRow", Map.of("foundry_conversation_id", header(same, "foundryConversationId"), "last_synced_sequence", 1));
+        client.deleteOldConversation(same);   // never deletes what it just built
+
+        assertEquals(3, conversations(), "the three rebuilt conversations are all there");
+        assertEquals(1, itemsOf(header(same, "foundryConversationId")).size());
     }
 
     @Test
@@ -716,10 +744,40 @@ class FoundryClientTest {
     }
 
     @Test
-    void aRebuildRefusedByFoundryIsARefusal() throws Exception {
+    void aRebuildRefusedByFoundryIsARefusalAndTheOldConversationIsStillThere() throws Exception {
+        String old = foundryHolding("user", "stale");
         fail("400", 1, "POST");
 
-        assertThrows(FoundryRejectedException.class, () -> client.rebuild(forRebuild(null, 3)));
+        assertThrows(FoundryRejectedException.class, () -> client.rebuild(forRebuild(old, 3)));
+
+        assertEquals(200, status("GET", "/openai/v1/conversations/" + old), "a refusal no longer leaves the conversation with no copy at all");
+    }
+
+    @Test
+    void aRebuildRefusedHalfWayLeavesTheOldConversationAndTheNextAttemptRemovesTheHalfBuiltOne() throws Exception {
+        String old = foundryHolding("user", "stale");
+        Exchange exchange = forRebuild(old, 5);
+        fail("500", 1, "GET");   // after the create: the read-back of the first item fails
+        assertThrows(FoundryUnavailableException.class, () -> client.rebuild(exchange));
+        assertEquals(2, conversations(), "the old one and the half-built one");
+
+        client.rebuild(exchange);
+        client.deleteOldConversation(exchange);
+
+        assertEquals(1, conversations(), "only the new one is left");
+        assertEquals(5, itemsOf(header(exchange, "foundryConversationId")).size());
+    }
+
+    @Test
+    void theConversationIsCreatedWithTheInstanceAndTheSourceInItsMetadata() throws Exception {
+        Exchange exchange = forCreate("appUser", "hola");
+
+        client.createConversation(exchange);
+
+        JsonNode metadata = JSON.readTree(get("/openai/v1/conversations/" + header(exchange, "foundryConversationId"))).get("metadata");
+        assertEquals("default", metadata.get("instance").asText());
+        assertEquals("ms-ml-camel-conv-history-bs", metadata.get("source").asText());
+        assertEquals("jt-conv", metadata.get("conversation_id").asText());
     }
 
     @Test

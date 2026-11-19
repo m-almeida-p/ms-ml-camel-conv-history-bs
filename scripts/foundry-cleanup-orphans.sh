@@ -5,24 +5,30 @@
 #   ./scripts/foundry-cleanup-orphans.sh --delete            delete them, after asking
 #   ./scripts/foundry-cleanup-orphans.sh --delete --yes      delete them without asking
 #   ./scripts/foundry-cleanup-orphans.sh --min-age SECONDS   only those older than this (default 600)
+#   ./scripts/foundry-cleanup-orphans.sh --instance NAME     only the conversations of that stack (default: default)
+#   ./scripts/foundry-cleanup-orphans.sh --allow-empty-map   delete even when the map has no rows (see below)
 #
 # How an orphan happens: the sync creates the Foundry conversation, and only then saves the map row. A crash between the two
 # leaves a conversation in Foundry that nothing maps; the retry makes another one. Nothing reads an orphan, so it is harmless,
 # but it takes room in the project.
 #
-# What it touches: only conversations whose metadata.source is ms-ml-camel-conv-history-bs and whose id is in no row of
-# camel_history.foundry_conversation_map. A conversation of another source is never touched. The minimum age keeps it
+# What it touches: only conversations whose metadata.source is ms-ml-camel-conv-history-bs, whose metadata.instance is the one asked
+# for (the sync's app.foundry.instance; a conversation made before that tag existed counts as "default") and whose id is in no row of
+# camel_history.foundry_conversation_map. A conversation of another source or instance is never touched. With an EMPTY map every
+# conversation of the instance would be an orphan, so --delete refuses unless --allow-empty-map says it is meant. The minimum age keeps it
 # away from one the sync has just created and is about to map. Needs the FOUNDRY_* variables in .env, curl, jq.
 
 # shellcheck source=./test-lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/test-lib.sh"
-DELETE=0; YES=0; MIN_AGE=600
+DELETE=0; YES=0; MIN_AGE=600; INSTANCE=default; ALLOW_EMPTY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --delete) DELETE=1 ;;
     --yes) YES=1 ;;
     --min-age) MIN_AGE="${2:?--min-age needs a number of seconds}"; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --instance) INSTANCE="${2:?--instance needs a name}"; shift ;;
+    --allow-empty-map) ALLOW_EMPTY=1 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -30,7 +36,8 @@ done
 command -v jq >/dev/null || { echo "❌  jq is required" >&2; exit 1; }
 [ -n "${FOUNDRY_ENDPOINT}" ] || { echo "❌  FOUNDRY_PROJECT_ENDPOINT is not set in .env" >&2; exit 1; }
 
-known="$(sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map" | sort)"
+# CLEANUP_MAP_QUERY lets the test of this script use an empty map without emptying the real one
+known="$(sql "${CLEANUP_MAP_QUERY:-SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map}" | sort)"
 now="$(date +%s)"; orphans=(); skipped_young=0; after=""; total=0
 while :; do
   foundry GET "/openai/v1/conversations?limit=100&order=desc${after:+&after=${after}}"
@@ -41,16 +48,21 @@ while :; do
     grep -qxF "${id}" <<< "${known}" && continue
     if [ $((now - created)) -lt "${MIN_AGE}" ]; then skipped_young=$((skipped_young + 1)); continue; fi
     orphans+=("${id}")
-  done < <(echo "${BODY}" | jq -r '.data[] | select(.metadata.source == "ms-ml-camel-conv-history-bs") | [.id, .created_at] | @tsv')
+  done < <(echo "${BODY}" | jq -r --arg instance "${INSTANCE}" '.data[] | select(.metadata.source == "ms-ml-camel-conv-history-bs" and ((.metadata.instance // "default") == $instance)) | [.id, .created_at] | @tsv')
   [ "$(echo "${BODY}" | jq -r .has_more)" = true ] || break
   after="$(echo "${BODY}" | jq -r .last_id)"
 done
 
 echo "Foundry holds ${total} conversation(s); the map knows $(echo "${known}" | grep -c . || true)."
-echo "orphans of this project: ${#orphans[@]}   (skipped as younger than ${MIN_AGE} s: ${skipped_young})"
+echo "orphans of this project (instance ${INSTANCE}): ${#orphans[@]}   (skipped as younger than ${MIN_AGE} s: ${skipped_young})"
 for id in ${orphans[@]+"${orphans[@]}"}; do echo "  ${id}"; done
 [ "${#orphans[@]}" -gt 0 ] || exit 0
 [ "${DELETE}" = 1 ] || { echo "nothing deleted. Add --delete to remove them."; exit 0; }
+if [ -z "${known}" ] && [ "${ALLOW_EMPTY}" != 1 ]; then
+  echo "❌  the map has no rows, so every conversation of instance ${INSTANCE} looks like an orphan. Nothing deleted." >&2
+  echo "    If the map really is empty on purpose, add --allow-empty-map." >&2
+  exit 2
+fi
 if [ "${YES}" != 1 ]; then
   printf "Delete these %s conversation(s) from Foundry? This cannot be undone. Type yes: " "${#orphans[@]}"
   read -r answer || answer=no

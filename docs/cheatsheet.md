@@ -138,7 +138,7 @@ docker compose up -d foundry-token                            # the token broker
 
 ./scripts/check-foundry-sync.sh                               # Foundry against camel_history, item by item (read-only)
 ./scripts/oracle-api.sh                                       # the Karavan-run API against SQL on the data, every account
-./scripts/foundry-cleanup-orphans.sh                          # Foundry conversations nobody maps; --delete removes them
+./scripts/foundry-cleanup-orphans.sh                          # Foundry conversations nobody maps; --delete removes them; --instance NAME for another stack's
 ./scripts/test-e2e.sh                                         # a real producer flow through the whole chain (VPN, agent)
 ```
 

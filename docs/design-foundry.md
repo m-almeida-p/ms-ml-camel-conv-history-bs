@@ -190,15 +190,16 @@ the step that failed. See [Reconciliation](conv-history-sync.md#reconciliation).
 flowchart TB
     s51["5.1 Log the reason"]
     s52["5.2 Find the stored messages"]
-    s53["5.3 Build it again in Foundry<br/>delete, create, add in order"]
+    s53["5.3 Build it again in Foundry<br/>create, add in order"]
     s54["5.4 Replace the maps<br/>one statement"]
-    s55["5.5 Log the rebuild"]
-    s51 --> s52 --> s53 --> s54 --> s55
+    s55["5.5 Delete the old one"]
+    s56["5.6 Log the rebuild"]
+    s51 --> s52 --> s53 --> s54 --> s55 --> s56
 ```
 
 *In words:* Foundry only appends. A message below the last synced sequence, a conversation Foundry no longer has, or an item
-nobody can account for cannot be repaired by adding, so the conversation is deleted in Foundry and created again from the
-stored messages, in order. See [Rebuilding a conversation](conv-history-sync.md#rebuilding-a-conversation).
+nobody can account for cannot be repaired by adding, so the conversation is created again in Foundry from the
+stored messages, in order, and the old one is deleted once the maps point at the new one. See [Rebuilding a conversation](conv-history-sync.md#rebuilding-a-conversation).
 
 ---
 

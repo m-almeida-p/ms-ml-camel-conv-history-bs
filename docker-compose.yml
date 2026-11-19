@@ -27,7 +27,7 @@ services:
       karavan-db:
         condition: service_healthy
     ports:
-      - "${KARAVAN_PORT:-9998}:8080"
+      - "127.0.0.1:${KARAVAN_PORT:-9998}:8080"
     environment:
       KARAVAN_GIT_REPOSITORY: ${KARAVAN_GIT_REPOSITORY:-}
       KARAVAN_GIT_USERNAME: ${KARAVAN_GIT_USERNAME:-}
@@ -105,7 +105,7 @@ services:
     container_name: karavan-registry
     restart: unless-stopped
     ports:
-      - "${KARAVAN_REGISTRY_PORT:-5555}:5000"
+      - "127.0.0.1:${KARAVAN_REGISTRY_PORT:-5555}:5000"
     labels:
       - "org.apache.camel.karavan/type=internal"
     networks: [yape-local]

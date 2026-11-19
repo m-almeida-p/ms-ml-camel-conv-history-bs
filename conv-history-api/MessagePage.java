@@ -109,8 +109,20 @@ public class MessagePage {
                 }
             }
         } catch (SQLException e) {
-            throw new java.io.UncheckedIOException(new java.io.IOException("database failure: " + e.getMessage(), e));
+            if (connectionProblem(e)) {
+                throw new java.io.UncheckedIOException(new java.io.IOException("database failure: " + e.getMessage(), e));   // 503: try again
+            }
+            throw e;   // a wrong statement or a missing column is a bug: 500
         }
         return found;
+    }
+
+    /** True when the database cannot be reached or has gone away (worth retrying), as opposed to a statement that is wrong. */
+    static boolean connectionProblem(SQLException e) {
+        if (e instanceof java.sql.SQLTransientException || e instanceof java.sql.SQLRecoverableException || e instanceof java.sql.SQLNonTransientConnectionException) {
+            return true;
+        }
+        String state = e.getSQLState();   // 08 connection, 53 resources, 57 operator intervention (a restart)
+        return state != null && (state.startsWith("08") || state.startsWith("53") || state.startsWith("57"));
     }
 }

@@ -28,7 +28,8 @@ import org.apache.camel.Exchange;
  *   3xx, 1xx                             FoundryUnavailableException: a redirect is a setting or a gateway, not the record's fault
  *
  * Settings: app.foundry.tokenUrl (the broker), app.foundry.endpoint (empty: the broker's endpoint) and
- * app.foundry.timeoutMs. The conversation id travels in the metadata of the Foundry conversation, with the source.
+ * app.foundry.timeoutMs. The conversation id travels in the metadata of the Foundry conversation, with the source and the instance
+ * (app.foundry.instance: which stack made it, so a cleanup of orphans never touches another stack's conversations).
  */
 @BindToRegistry("foundry")
 public class FoundryClient {
@@ -43,6 +44,7 @@ public class FoundryClient {
     private String tokenUrl;
     private String endpointOverride;
     private Duration timeout;
+    private String instance;
 
     private String token;
     private String brokerEndpoint;
@@ -62,7 +64,7 @@ public class FoundryClient {
         configure(exchange.getContext());
         String conversationId = exchange.getMessage().getHeader("conversationId", String.class);
         ObjectNode body = JSON.createObjectNode();
-        body.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE);
+        body.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE).put("instance", instance);
         body.putArray("items").add(item(exchange.getMessage().getHeader("storedRole", String.class), exchange.getMessage().getHeader("storedText", String.class)));
         String foundryConversationId = JSON.readTree(call(exchange, "POST", "/openai/v1/conversations", body.toString()).body()).path("id").asText();
         if (foundryConversationId.isEmpty()) {
@@ -207,10 +209,11 @@ public class FoundryClient {
      * adding: a message arrived below the last synced sequence, Foundry no longer has the conversation, or it holds an
      * item nobody can account for.
      *
-     * Reads the headers convMapRow (the old conversation, or none) and allMessages (every stored message to send: sequence,
-     * role, text), in sequence order. Deletes the old Foundry conversation (a 404 is fine), creates the new one with the
-     * first message and adds the rest, one call each. Sets foundryConversationId, rebuildJson (every item, as
-     * [{"sequence":n,"itemId":"msg_..."}]) and rebuildLast (the highest sequence).
+     * Reads the header allMessages (every stored message to send: sequence, role, text), in sequence order. Creates the new
+     * conversation with the first message and adds the rest, one call each. The OLD conversation is left alone: it is deleted
+     * by deleteOldConversation once the maps point at the new one, so a refusal or a crash in the middle never leaves the
+     * conversation with no copy. Sets foundryConversationId, rebuildJson (every item, as [{"sequence":n,"itemId":"msg_..."}])
+     * and rebuildLast (the highest sequence).
      *
      * It is one step, so a retry starts it over. The conversation made by an attempt that failed half way is remembered
      * in the exchange property rebuildAttempt and deleted by the next attempt, so a retry leaves no orphan.
@@ -219,19 +222,15 @@ public class FoundryClient {
     public void rebuild(Exchange exchange) throws Exception {
         configure(exchange.getContext());
         List<Map<String, Object>> messages = exchange.getMessage().getHeader("allMessages", List.class);
-        Map<?, ?> oldRow = exchange.getMessage().getHeader("convMapRow", Map.class);
         String half = exchange.getProperty("rebuildAttempt", String.class);
         if (half != null) {
             call(exchange, "DELETE", "/openai/v1/conversations/" + half, null);
             exchange.removeProperty("rebuildAttempt");
         }
-        if (oldRow != null) {
-            call(exchange, "DELETE", "/openai/v1/conversations/" + oldRow.get("foundry_conversation_id"), null);
-        }
 
         String conversationId = exchange.getMessage().getHeader("conversationId", String.class);
         ObjectNode create = JSON.createObjectNode();
-        create.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE);
+        create.putObject("metadata").put("conversation_id", conversationId).put("source", SOURCE).put("instance", instance);
         create.putArray("items").add(item(String.valueOf(messages.get(0).get("role")), String.valueOf(messages.get(0).get("text"))));
         String fid = JSON.readTree(call(exchange, "POST", "/openai/v1/conversations", create.toString()).body()).path("id").asText();
         if (fid.isEmpty()) {
@@ -252,6 +251,20 @@ public class FoundryClient {
         exchange.getMessage().setHeader("rebuildJson", record.toString());
         exchange.getMessage().setHeader("rebuildLast", ((Number) messages.get(messages.size() - 1).get("sequence")).intValue());
         exchange.removeProperty("rebuildAttempt");
+    }
+
+    /**
+     * Deletes the Foundry conversation that a rebuild replaced (a 404 is fine), after the maps point at the new one. Reads
+     * convMapRow (the old row, or none) and foundryConversationId (the new one). A retry of this step is harmless.
+     */
+    public void deleteOldConversation(Exchange exchange) throws Exception {
+        configure(exchange.getContext());
+        Map<?, ?> oldRow = exchange.getMessage().getHeader("convMapRow", Map.class);
+        String fresh = exchange.getMessage().getHeader("foundryConversationId", String.class);
+        if (oldRow == null || String.valueOf(oldRow.get("foundry_conversation_id")).equals(fresh)) {
+            return;
+        }
+        call(exchange, "DELETE", "/openai/v1/conversations/" + oldRow.get("foundry_conversation_id"), null);
     }
 
     // ---- the message as a Foundry item -----------------------------------------------------------------------------
@@ -380,6 +393,7 @@ public class FoundryClient {
                 tokenUrl = context.resolvePropertyPlaceholders("{{app.foundry.tokenUrl}}");
                 endpointOverride = context.resolvePropertyPlaceholders("{{app.foundry.endpoint}}");
                 timeout = Duration.ofMillis(Long.parseLong(context.resolvePropertyPlaceholders("{{app.foundry.timeoutMs}}")));
+                instance = context.resolvePropertyPlaceholders("{{app.foundry.instance:default}}");
                 configured = true;
             }
         }

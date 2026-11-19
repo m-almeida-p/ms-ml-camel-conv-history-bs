@@ -34,7 +34,7 @@
         - bean:
             id: rebuildInFoundry
             description: 5.3 Build it again in Foundry
-            note: "Deletes the old conversation, creates a new one with the first message and adds the rest in order. One step, so a retry starts over and removes what it left. Docs: conv-history-sync.md > Rebuilding a conversation."
+            note: "Creates a new conversation with the first message and adds the rest in order; the old one is not touched. One step, so a retry starts over and removes what it left. Docs: conv-history-sync.md > Rebuilding a conversation."
             ref: foundry
             method: rebuild
         - to:
@@ -62,8 +62,14 @@
                 SELECT CAST(:#conversationId AS varchar), a.sequence, a."itemId"
                 FROM json_to_recordset(CAST(:#rebuildJson AS json)) AS a(sequence int, "itemId" text)
                 ON CONFLICT (conversation_id, sequence) DO UPDATE SET foundry_item_id = EXCLUDED.foundry_item_id, synced_at = now()
+        - bean:
+            id: deleteOldInFoundry
+            description: 5.5 Delete the old one
+            note: "Only now that the maps point at the new conversation. A 404 is fine and a retry is harmless. Docs: conv-history-sync.md > Rebuilding a conversation."
+            ref: foundry
+            method: deleteOldConversation
         - log:
             id: logRebuilt
-            description: 5.5 Log the rebuild
+            description: 5.6 Log the rebuild
             loggingLevel: WARN
             message: "Conversation rebuilt conversation=${header.conversationId} reason=${header.rebuildReason} foundryConversation=${header.foundryConversationId} lastSequence=${header.rebuildLast}"

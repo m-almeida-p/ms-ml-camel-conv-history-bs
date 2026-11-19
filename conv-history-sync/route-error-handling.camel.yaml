@@ -71,8 +71,9 @@
                   name: deadLetter
 
       # The history consumer has not written the message row yet. The two projects read the same topic at the same
-      # time, so this one can be first. The wait is bounded: if the row never comes (the consumer dead-lettered the
-      # record), the record is dead-lettered here too, instead of holding the partition for good.
+      # time, so this one can be first. The wait is bounded (app.sync.projectionWaitSeconds, ten minutes): if the row never comes
+      # (the consumer dead-lettered the record, or has been down for longer), the record is dead-lettered here too, instead of
+      # holding the partition for good. A later message of the conversation sends the one that was skipped (route 4).
       - onException:
           id: onProjectionPending
           description: Message not stored yet (wait)
@@ -85,8 +86,10 @@
             # The Dead Letter Channel's exponential back-off is inherited unless it is switched off: the wait would
             # double each second (1, 2, 4, 8...) and last a minute instead of projectionWaitSeconds.
             useExponentialBackOff: "false"
+            # a wait that can last ten minutes says so once a minute, as a WARN: a consumer that is down must be seen
             logRetryAttempted: "true"
-            retryAttemptedLogLevel: INFO
+            retryAttemptedLogLevel: WARN
+            retryAttemptedLogInterval: "60000"
             logStackTrace: "false"
             logExhausted: "true"
           handled:

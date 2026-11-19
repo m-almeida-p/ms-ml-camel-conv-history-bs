@@ -106,8 +106,9 @@ So a deployment needs a gateway in front that binds `idYapeAccount` to the calle
 `/messages` unless it keeps its own conversation-to-account mapping or asks the list first. If that gap matters, the fix is an
 optional `idYapeAccount` on `/messages` that must match the conversation's (404 on a mismatch): a contract change, so not made here.
 
-On a developer machine the compose files publish `8086` (API), `8084` (sync), `8081` (consumer), Karavan (`9998`) and its image
-registry (`5555`) on **all** interfaces, so anyone on the same network reaches them. Bind them to `127.0.0.1` on a shared network.
+The compose files publish `8086` (API), `8084` (sync), `8081` (consumer), Karavan (`9998`) and its image registry (`5555`) on
+`127.0.0.1` only, so nobody else on the network reaches them. Behind a gateway on another host, publish the API's port as needed,
+and only then.
 
 ## Differences from the reference service
 

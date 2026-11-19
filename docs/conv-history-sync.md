@@ -21,7 +21,7 @@ Five routes, read in order. The numbers are the same in the Designer, in the dia
 | | 2.6 Log the message | `Message synced conversation=… sequence=… foundryConversation=… item=…` |
 | **3 Dead-letter** | 3.1 to 3.3 | Name the reason, write the log, commit. [The dead-letter log](#the-dead-letter-log). |
 | **4 Append** | 4.1 to 4.6 | Look up the last mapped item and the messages that come next, **add or adopt** (one step), rebuild if Foundry is inconsistent, record the items. [Reconciliation](#reconciliation). |
-| **5 Rebuild** | 5.1 to 5.5 | Build the conversation again in Foundry. [Rebuilding a conversation](#rebuilding-a-conversation). |
+| **5 Rebuild** | 5.1 to 5.6 | Build the conversation again in Foundry. [Rebuilding a conversation](#rebuilding-a-conversation). |
 
 The Foundry calls are made by the bean `FoundryClient`, not by http steps, so the token comes from the broker and not from the
 message, no header of the message is sent to Foundry, and each outcome becomes one of the three families of
@@ -41,9 +41,10 @@ In `application.properties`; each can be overridden by an environment variable (
 | `app.foundry.tokenUrl` | `http://foundry-token:8099/token` | The broker. Not a secret |
 | `app.foundry.endpoint` | empty | Empty: the broker's endpoint, from `.env`. Set it to point at another Foundry, for example the fake |
 | `app.foundry.timeoutMs` | `10000` | How long a call to Foundry or the broker may take |
-| `app.sync.projectionWaitSeconds` | `60` | How long to wait for the history consumer's row. Past it the record is dead-lettered (`projection-missing`) and its offset moves: see [what it does not do](#what-it-does-not-do) |
+| `app.sync.projectionWaitSeconds` | `600` | How long to wait (ten minutes) for the history consumer's row, with a `WARN` once a minute while it waits. Past it the record is dead-lettered (`projection-missing`) and its offset moves: see [what it does not do](#what-it-does-not-do) |
+| `app.foundry.instance` | `default` | Which stack made a Foundry conversation (its `metadata.instance`). Give each developer or environment that shares a Foundry project its own, so `foundry-cleanup-orphans.sh --instance NAME` only touches that stack's |
 
-The Kafka endpoint reads at most **20 records per poll** and allows **15 minutes** between polls (`maxPollRecords`, `maxPollIntervalMs` in `route-receive.camel.yaml`). A record costs about two Foundry calls, and a rebuild one per message, so with Kafka's defaults (500 records, 5 minutes) a catch-up after an outage could get the sync evicted from its group.
+The Kafka endpoint reads at most **20 records per poll** and allows **30 minutes** between polls (`maxPollRecords`, `maxPollIntervalMs` in `route-receive.camel.yaml`). A record costs about two Foundry calls, and a rebuild one per message, so with Kafka's defaults (500 records, 5 minutes) a catch-up after an outage could get the sync evicted from its group.
 
 ## What happens to each kind of record
 
@@ -68,7 +69,7 @@ Three families, written as the exceptions that `route-error-handling.camel.yaml`
 |---|---|---|
 | Cannot answer, try later | `java.io.IOException` (`FoundryUnavailableException`), and the database's connection failures | Retry in place, forever, the wait doubling from 1 s to 30 s. The partition is held, nothing is skipped. |
 | Refused for good | `org.apache.camel.ValidationException` (`PoisonRecordException`, `FoundryRejectedException`) | No retry. Route 3, then the offset moves. |
-| The consumer's row is not there yet | `java.sql.SQLTransientException` (`ProjectionPendingException`) | Retry once a second for `projectionWaitSeconds`, then route 3. |
+| The consumer's row is not there yet | `java.sql.SQLTransientException` (`ProjectionPendingException`) | Retry once a second for `projectionWaitSeconds` (a `WARN` once a minute), then route 3. |
 | Anything else | `java.lang.Exception` | The Dead Letter Channel: 3 retries, then route 3. |
 
 Two Camel behaviours decide how this is built, and both cost a failing test to find:
@@ -132,9 +133,11 @@ Foundry can only append. Three situations cannot be repaired by adding:
 | `gone` | Foundry answers 404: it no longer has the conversation |
 | `unknown-items` | Foundry holds an item that no stored message accounts for |
 
-Route 5 then deletes the old Foundry conversation (a 404 is fine), creates a new one with the first stored message, adds the rest in
-order, and swaps the map rows in one statement (the conversation row is updated, item rows are upserted, any other is removed). It
-is one step, so a retry starts over, and the conversation that a failed attempt made is deleted by the next one.
+Route 5 creates a new Foundry conversation with the first stored message, adds the rest in order, swaps the map rows in one
+statement (the conversation row is updated, item rows are upserted, any other is removed) and **only then deletes the old
+conversation** (a 404 is fine). So a refusal or a crash in the middle never leaves the conversation without a copy: the old one
+and the map are still there. Building the new one is one step, so a retry starts over, and the conversation that a failed attempt
+made is deleted by the next one.
 
 The log says why, at `WARN`: `Rebuilding conversation=… reason=…` and `Conversation rebuilt conversation=… reason=…`.
 

@@ -39,8 +39,20 @@ public class SyncStore {
         } catch (ProjectionPendingException e) {
             throw e;   // the bounded wait of the route, not a database failure
         } catch (SQLException e) {
-            // A database that cannot be reached is the route's "dependency down": retried forever.
-            throw new UncheckedIOException(new IOException("database failure: " + e.getMessage(), e));
+            if (connectionProblem(e)) {
+                // A database that cannot be reached is the route's "dependency down": retried forever.
+                throw new UncheckedIOException(new IOException("database failure: " + e.getMessage(), e));
+            }
+            throw e;   // a wrong statement or a missing column is a bug: three tries, then the dead-letter log, not an endless wait
         }
+    }
+
+    /** True when the database cannot be reached or has gone away (worth retrying), as opposed to a statement that is wrong. */
+    static boolean connectionProblem(SQLException e) {
+        if (e instanceof java.sql.SQLTransientException || e instanceof java.sql.SQLRecoverableException || e instanceof java.sql.SQLNonTransientConnectionException) {
+            return true;
+        }
+        String state = e.getSQLState();   // 08 connection, 53 resources, 57 operator intervention (a restart)
+        return state != null && (state.startsWith("08") || state.startsWith("53") || state.startsWith("57"));
     }
 }

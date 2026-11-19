@@ -326,15 +326,16 @@ section_crash() {
   fake_fail '{"mode":"late","count":1,"delayMs":25000,"method":"POST"}'
   store_message ts-k3 2 appMaker "r2"
   printf '%s\n' $'ts-k3\t2\tAgentMessageSent\tr2\tagent' | publish      # a late message: the conversation must be rebuilt
-  wait_until "the rebuild created the new conversation" 40 "[ \"\$(curl -s http://localhost:8098/__state | jq -r '.items | length')\" -ge 0 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8098/api/projects/fake/openai/v1/conversations/${old} -H 'Authorization: Bearer t')\" = 404 ]"
+  wait_until "the rebuild created the new conversation" 40 '[ "$(fake_conversations)" -gt "${before}" ]'   # the create was applied; its answer is held back
   kill_sync
-  check "the old Foundry conversation was already deleted by the rebuild" 404 "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8098/api/projects/fake/openai/v1/conversations/${old}" -H 'Authorization: Bearer t')"
-  check "but the map still points at it" "${old}" "$(fid ts-k3)"
+  check "the old Foundry conversation is still there: nothing is deleted until the maps point at the new one" 200 "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8098/api/projects/fake/openai/v1/conversations/${old}" -H 'Authorization: Bearer t')"
+  check "and the map still points at it" "${old}" "$(fid ts-k3)"
   relaunch_project
   wait_until "the rebuild finished after the restart" 90 '[ "$(log_count "Conversation rebuilt conversation=ts-k3")" -ge 1 ]'
   fx "/openai/v1/conversations/$(fid ts-k3)/items?order=asc&limit=100"
   check "the rebuilt conversation holds all three, in order" "r1,r2,r3" "$(texts)"
   check "the item map has three rows" 3 "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='ts-k3'")"
+  check "the old Foundry conversation was deleted once the maps pointed at the new one" 404 "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8098/api/projects/fake/openai/v1/conversations/${old}" -H 'Authorization: Bearer t')"
   check "the half-built conversation of the dead process is an orphan" 1 "$(orphans_of ts-k3)"
   # not dlq_new: the container was killed and relaunched, so its log (and the counter taken at the start) began again
   check "nothing of this section was dead-lettered" 0 "$(log_text | grep -c 'DLQ reason=.*ts-k[123]' || true)"

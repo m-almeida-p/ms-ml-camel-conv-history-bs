@@ -389,9 +389,9 @@ forever, the wait doubling from 1 s to 30 s, and the offset does not move.
 `database failure`). When it answers again the sync goes on by itself; nothing is lost or duplicated.
 
 ### `DLQ reason=projection-missing`
-**Cause:** the sync waited `app.sync.projectionWaitSeconds` for the history consumer's row and it never came. The consumer may be
-stopped or behind, or it dead-lettered the same record.
-**Fix:** check `conv-history-consumer` and its `DLQ` lines. Once the row exists, replay the record (rewind **only the sync's own
+**Cause:** the sync waited `app.sync.projectionWaitSeconds` (ten minutes, with a `WARN` once a minute) for the history consumer's row and it never came. The consumer may be
+stopped or behind for longer than that, or it dead-lettered the same record.
+**Fix:** check `conv-history-consumer` and its `DLQ` lines. The skipped message is sent with the next message of its conversation; if it was the last one, replay the record once the row exists (rewind **only the sync's own
 group**, see the cheatsheet).
 
 ### `DLQ reason=foundry-rejected field=http-400`
@@ -451,7 +451,7 @@ dry run showed non-zero NEW-OFFSETs.
 
 ### The Foundry project has conversations nobody mapped
 **Cause:** a crash between creating a Foundry conversation and saving its map row (the retry makes another one), or a test that died.
-**Fix:** `./scripts/foundry-cleanup-orphans.sh` lists them; `--delete` removes them after asking.
+**Fix:** `./scripts/foundry-cleanup-orphans.sh` lists them; `--delete` removes them after asking. It only looks at conversations of its own `--instance` (default `default`, the sync's `app.foundry.instance`) and refuses to delete when the map has no rows, because then every conversation would look like an orphan.
 
 ### Tests: a script waits for something that already happened
 **Cause:** `wait_until "..." 30 test "$(count)" -ge 1` expands `$(count)` once, before the wait starts, so the condition never changes.
