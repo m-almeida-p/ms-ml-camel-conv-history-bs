@@ -38,7 +38,7 @@ import org.apache.camel.Message;
  *   1. the wire format: the Schema Registry header (zero byte + 4-byte schema id) and the schema id, which
  *      must be one of the allowed ids;
  *   2. the schema the registry holds for that id (a JSON Schema), so a type that does not fit is refused;
- *   3. the consumer's own contract, the rules of ms-ml-conv-history-bs's decoder (the registered schema has no
+ *   3. the consumer's own contract (the registered schema has no
  *      "required" list, so it alone would let a record without a conversation_id through);
  *   4. the projection of the three chat events into a message.
  *

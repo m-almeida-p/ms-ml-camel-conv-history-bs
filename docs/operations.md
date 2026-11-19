@@ -53,7 +53,7 @@ The sync, restarted at any moment, resumes from its committed offsets and reconc
 sync did not record is adopted, not sent again). Tested by killing it with SIGKILL ([testing.md](testing.md#system-suites)).
 
 To replay records, rewind **only the project's own group** with it stopped: see the offsets section of
-[cheatsheet.md](cheatsheet.md). Never touch the group `ms-ml-conv-history-bs` (the original service's).
+[cheatsheet.md](cheatsheet.md).
 
 ## Rollback plan
 

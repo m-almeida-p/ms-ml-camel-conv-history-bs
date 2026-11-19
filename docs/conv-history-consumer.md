@@ -1,9 +1,9 @@
 # conv-history-consumer
 
-A Camel Kafka consumer, built in Karavan, that **builds the conversation history** from the events topic: the
-same three tables, with the same rules, as the reference service
-[`ms-ml-conv-history-bs`](../../ms-ml-conv-history-bs). It also enforces the Kafka schema and writes every
-poison message to a dead-letter log.
+A Camel Kafka consumer, built in Karavan, that **builds the conversation history** from the events topic into three
+tables: the inbox, the chat messages and the conversation summaries. It also enforces the Kafka schema and writes every
+poison message to a dead-letter log. The history is read through the API and the MCP server of
+[`ms-ml-conv-history-bs`](../../ms-ml-conv-history-bs).
 
 Project folder: [`conv-history-consumer/`](../conv-history-consumer)
 
@@ -25,8 +25,8 @@ each step:
 Records that fail validation or that the store refuses go to route 3. A database or registry outage is retried
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
 
-The tables live in the schema **`camel_history`** of the cluster's Postgres, apart from the original consumer's
-`history.conversation_*` tables, so both can run and be compared. Their DDL is the migration folder
+The tables live in the schema **`camel_history`** of the cluster's Postgres, apart from the `history` schema
+(written by `ms-ml-conv-history-consumer`). Their DDL is the migration folder
 `history/camel_conversation` of the repository `ms-ml-conv-history-migrations`
 (`make migrations/up FLOW=camel_conversation` there).
 
@@ -58,10 +58,10 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 |---|---|---|
 | `app.topic` | `yape.event_store.conversation_events` | Topic to read. |
 | `app.kafka.brokers` | `kafka:29092` | The cluster's internal listener (from the host: `localhost:9092`). |
-| `app.kafka.groupId` | `ms-ml-camel-conv-history-bs` | Different from the original's group, so they never compete. |
+| `app.kafka.groupId` | `ms-ml-camel-conv-history-bs` | Its own group: no other consumer shares it. |
 | `app.schema.registryUrl` | `http://schema-registry:8081` | Where schemas are read. |
 | `app.schema.allowedIds` | `2` | Schema ids accepted, comma separated. |
-| `app.schema.requireFraming` | `true` | `false` also accepts plain JSON, as the original does. |
+| `app.schema.requireFraming` | `true` | `false` also accepts plain JSON. |
 | `app.db.url` / `app.db.user` | `jdbc:postgresql://db:5432/postgres?currentSchema=camel_history` / `postgres` | Target. The cluster trusts local connections: no password. |
 
 The project's port is `8081` on the host (its `docker-compose.yaml`: Karavan reads it, and it must be plain `host:container`).
@@ -88,7 +88,7 @@ Schemas are fetched once per id and kept, because ids never change. If the regis
 
 ### The contract (layer 3)
 
-The rules of the original's decoder, plus `actor`:
+The consumer's contract:
 
 | Field | Rule |
 |---|---|
@@ -102,7 +102,7 @@ The rules of the original's decoder, plus `actor`:
 | `payload`, `metadata` | required; JSON (a string holding JSON, as Debezium sends JSONB, or an object) that is an object or array |
 | unknown fields | ignored, so a new column does not break the consumer |
 
-An empty or `null` value, or a registry header followed by an empty or `null` JSON, is a tombstone and is skipped. A value with anything after the top-level JSON value is refused as `json`, as the original's parser does.
+An empty or `null` value, or a registry header followed by an empty or `null` JSON, is a tombstone and is skipped. A value with anything after the top-level JSON value is refused as `json`.
 
 ## Projection: what becomes a message
 
@@ -171,7 +171,7 @@ DLQ reason=field-range field=conversation_id topic=yape.event_store.conversation
 | `detail` | A short explanation. |
 
 > **The body is logged in full.** It holds conversation text and account IDs. That is acceptable with fake data on a
-> local machine, and it makes replay possible. The reference service deliberately logs no content. Before using real
+> local machine, and it makes replay possible. Before using real
 > data or a shared environment, remove `body=${exchangeProperty.rawText}` from the `logDeadLetter` step in
 > `route-error-handling.camel.yaml`.
 
@@ -240,14 +240,12 @@ Three scripts, all against the local cluster; the first two use **throwaway topi
 |---|---|---|
 | `./scripts/test-consumer.sh` | 37 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
 | `./scripts/test-camel.sh consumer` | 81 JUnit tests: the decoder at the edges of every field (66, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
-| `./scripts/parity-check.sh` | Replays the 96 rows of `event_store.conversation_events` as Debezium would, and compares the three `camel_history` tables with the original consumer's `public` tables, every column, both directions. | about 25 s |
 
 `test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
-**`parity-check.sh` TRUNCATES the three `camel_history` tables (inbox, messages, summaries) before and after**, which would wipe the live history the sync and the API
-serve, so it refuses to run while they hold rows unless you pass `--wipe-camel-history`. None of them writes to the real topic or to the `public` tables.
+None of them writes to the real topic.
 
 To publish a fake record to the real topic by hand, remember it needs the Schema Registry header, or it is
-dead-lettered as `no-schema-header`, and **Kafka cannot delete records**: if the original service starts later it reads
+dead-lettered as `no-schema-header`, and **Kafka cannot delete records**: if another consumer group starts later it reads
 them too. Always use obviously fake IDs. Two unframed test records from setup (`test-karavan-conv-0001`, `-0002`) are
 already on the topic and show up as `no-schema-header` in the DLQ log.
 
@@ -263,10 +261,10 @@ do first.
 - **Two writers on the same event.** The duplicate check reads the inbox in the same statement. If a second consumer
   commits the same stream position between the statement's snapshot and its insert, a genuine duplicate could be
   reported as `store-rejected`. It needs two concurrent consumers; with one group member it cannot happen.
-- **No rebuild command.** The original can replay its inbox into messages and summaries (`consumer rebuild`). That is
-  not ported. It would be a single `INSERT ... SELECT` from `conversation_inbox`.
+- **No rebuild command.** Recreating the messages and summaries from the inbox would be a single
+  `INSERT ... SELECT` from `conversation_inbox`; there is no command for it.
 - **A lone surrogate becomes `?`.** A text with half of an emoji (`\uD800`) cannot be UTF-8; the JDBC driver stores `?` in its place and the stream goes on.
-- **Lowercase `t` and `z` in `occurred_at` are accepted** (RFC 3339 allows them; Java parses them). The original's Go parser refuses them. No producer writes them.
+- **Lowercase `t` and `z` in `occurred_at` are accepted** (RFC 3339 allows them; Java parses them). No producer writes them.
 - **The DLQ is a log.** It lives as long as the container's logs do.
 - **The registry schema is read at the first record,** not at startup. An unreachable registry shows as `WARN` retries
   on the first record, not as a failed start.

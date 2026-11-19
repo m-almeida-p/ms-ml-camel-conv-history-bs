@@ -3,7 +3,7 @@
 #
 #   ./scripts/contract-check.sh <directory of recorded responses>
 #
-# Checks them against docs/contract/ms-ml-conv-history-bs-openapi.yml (the reference service's OpenAPI, copied unchanged).
+# Checks them against docs/contract/ms-ml-conv-history-bs-openapi.yml (the OpenAPI of ms-ml-conv-history-bs, copied unchanged).
 
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

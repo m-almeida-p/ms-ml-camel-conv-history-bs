@@ -123,7 +123,7 @@
 
       # Known transient failures: the database is unreachable or times out, or the schema registry cannot be reached.
       # The record itself is fine, so it is never dead-lettered for this. It is retried in place, forever, the wait
-      # doubling from 1 s to 30 s, and its offset does not move until it works (as ms-ml-conv-history-bs does).
+      # doubling from 1 s to 30 s, and its offset does not move until it works.
       - onException:
           id: onTransient
           description: Dependency down (retry forever)

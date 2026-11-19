@@ -49,14 +49,11 @@ docker logs conv-history-consumer 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep 'DLQ r
 docker logs conv-history-consumer 2>&1 | grep -o 'DLQ reason=[a-z-]*' | sort | uniq -c         # count by reason
 docker logs conv-history-consumer 2>&1 | grep -E 'Event (stored|duplicate)' | tail             # what was stored
 
-# What the consumer wrote (schema camel_history), and the original consumer's result next to it
+# What the consumer wrote (schema camel_history)
 docker exec yape-postgres psql -U postgres -d postgres -c "
   SELECT 'camel_history' AS who, (SELECT count(*) FROM camel_history.conversation_inbox) AS inbox,
          (SELECT count(*) FROM camel_history.conversation_messages) AS messages,
-         (SELECT count(*) FROM camel_history.conversation_summaries) AS summaries
-  UNION ALL
-  SELECT 'history (original)', (SELECT count(*) FROM history.conversation_inbox),
-         (SELECT count(*) FROM history.conversation_messages), (SELECT count(*) FROM history.conversation_summaries)"
+         (SELECT count(*) FROM camel_history.conversation_summaries) AS summaries"
 ```
 
 ### Local runner and tests (no Karavan)
@@ -65,7 +62,6 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
 ./scripts/devmode-local.sh conv-history-consumer APP_TOPIC=camel.test.events APP_KAFKA_GROUPID=camel-test   # run the project
 ./scripts/devmode-local.sh stop conv-history-consumer
 ./scripts/test-consumer.sh        # 37 checks on a throwaway topic (about 2 min); only touches rows whose id starts with t-
-./scripts/parity-check.sh --wipe-camel-history   # DESTRUCTIVE: empties camel_history; refuses without the flag (about 25 s)
 ```
 
 ## Kafka (inside the `yape-kafka` container)
@@ -102,8 +98,7 @@ command. **Records cannot be deleted from Kafka**, so use obviously fake data.
 ### Consumer group offsets
 
 Replay messages by rewinding **only your own group**
-(`ms-ml-camel-conv-history-bs`). Never reset `ms-ml-conv-history-bs`; that is
-the real service's group.
+(`ms-ml-camel-conv-history-bs`).
 
 1. Stop the consumer (Karavan **Containers** → **Stop**).
 2. Wait until the group is inactive, about 45 seconds:
@@ -166,7 +161,7 @@ curl -s localhost:8086/health
 ```
 
 The sync's own group is `ms-ml-camel-conv-history-sync`. To replay it, follow [Consumer group offsets](#consumer-group-offsets)
-for that group, never for `ms-ml-conv-history-bs`. **Always `--dry-run` first**: the topic's retention has removed old events, so
+for that group. **Always `--dry-run` first**: the topic's retention has removed old events, so
 "earliest" may not be offset 0.
 
 Foundry, by hand (needs `az login`; the token is not printed):

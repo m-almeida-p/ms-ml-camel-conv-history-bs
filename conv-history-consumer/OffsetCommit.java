@@ -6,7 +6,7 @@ import org.apache.camel.component.kafka.consumer.KafkaManualCommit;
 /**
  * Commits the offset of the record being handled. The route calls it only after the record was stored, or
  * dead-lettered, so a record that was not handled is never covered by a later commit (at-least-once
- * delivery, like ms-ml-conv-history-bs). The Kafka endpoint runs with autoCommitEnable=false and
+ * delivery). The Kafka endpoint runs with autoCommitEnable=false and
  * allowManualCommit=true for this.
  */
 @BindToRegistry("offsetCommit")

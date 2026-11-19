@@ -1,7 +1,7 @@
 # conv-history-api
 
 Serves the conversation history with the **same API as `ms-ml-conv-history-bs`**, reading the messages from the Microsoft Foundry
-Conversations API. The contract is the reference service's OpenAPI, copied unchanged to
+Conversations API. The contract is the OpenAPI of `ms-ml-conv-history-bs`, copied unchanged to
 [`contract/`](contract/ms-ml-conv-history-bs-openapi.yml). Diagrams: [design-foundry.md](design-foundry.md). Setting it up:
 [foundry-setup.md](foundry-setup.md).
 
@@ -40,8 +40,8 @@ which is why this comes from Postgres.
 - **`page[after]=<cursor>`:** more recent ones. The page is read oldest first and turned round, so every page is most recent
   first; its `Link` is `rel="next"`, with the cursor of the most recent conversation of the page.
 - `page[size]` is repeated in the `Link` only when it is not 100. A page past the end is `{"conversations":[]}` with no `Link`.
-- `firstReceived` and `lastReceived` are Unix seconds with milliseconds as decimals, cut (not rounded) to the millisecond, like the
-  reference service.
+- `firstReceived` and `lastReceived` are Unix seconds with milliseconds as decimals, cut (not rounded) to the millisecond, like
+  `ms-ml-conv-history-bs`.
 
 ## The messages
 
@@ -68,7 +68,7 @@ Foundry's `after` follows the order of the listing, which is why the messages **
 
 ## Errors
 
-Every error is `application/problem+json`, as in the reference service. A client tells problems apart by `type`, never by `detail`.
+Every error is `application/problem+json`, as in `ms-ml-conv-history-bs`. A client tells problems apart by `type`, never by `detail`.
 No detail repeats a value the client sent.
 
 | Status | Type (`tag:yape.com.pe,2026:conversation-history:`…) | When |
@@ -95,7 +95,7 @@ included. `ApiRequest`, `ProblemResponder` and the first step of the health rout
 
 ## Who can call it
 
-**Nobody is authenticated.** Like the reference service, this is a PoC: the contract says so (`docs/contract/`, "there is no
+**Nobody is authenticated.** Like `ms-ml-conv-history-bs`, this is a PoC: the contract says so (`docs/contract/`, "there is no
 authentication, so it must not be deployed"). It trusts what it is given:
 
 - `GET /v1/conversations` takes the account from the `idYapeAccount` query parameter, as sent.
@@ -111,12 +111,12 @@ Karavan (`9998`) and its image registry (`5555`) are published on `127.0.0.1` on
 Karavan's compose parser reads a port as `host:container` and fails on `127.0.0.1:8086:8080`, so a project's `docker-compose.yaml`
 cannot bind to the loopback. Close them with the host's firewall, or put the API behind a gateway and do not expose it otherwise.
 
-## Differences from the reference service
+## Differences from `ms-ml-conv-history-bs`
 
 The contract is the same and the tests check every response against it. These are the places where this service behaves
 differently, on purpose:
 
-| | Reference service | This service | Why |
+| | `ms-ml-conv-history-bs` | This service | Why |
 |---|---|---|---|
 | Where a message comes from | Postgres | Foundry (the text), Postgres (the rest) | The point of the exercise |
 | A conversation or message not yet in Foundry | Listed and served | Not listed, not served | The list and the messages must agree with what Foundry holds |

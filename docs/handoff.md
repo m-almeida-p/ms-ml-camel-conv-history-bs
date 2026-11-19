@@ -6,7 +6,8 @@ owner set, how to change something safely, and what is still open. Everything el
 ## What this is
 
 Three Apache Camel Karavan projects that serve conversation history through the **Microsoft Foundry Conversations API**, with the
-same HTTP contract as the Go service `ms-ml-conv-history-bs` (copied unchanged in `docs/contract/`):
+same HTTP contract as the history API of `ms-ml-conv-history-bs` (copied unchanged in `docs/contract/`; that service also serves the
+history to an agent as MCP tools):
 
 | Project | Does |
 |---|---|
@@ -51,12 +52,10 @@ Needs the shared cluster up (`../cluster/scripts/up.sh`, network `yape-local`) a
 
 These stand until the owner changes them.
 
-- **Never run the Go service** (`ms-ml-conv-history-bs`) or its consumer. The oracle (`scripts/oracle-api.sh`) replaces parity with it.
 - **Never commit in `../ml-genai-agents-bs-testing`.** It is the producer repo. **A new table goes through a migration in
   `../ms-ml-conv-history-migrations`** (the history migrations, copied from the producer repo, live there), not through SQL here.
-- **Never run that repo's `run.sh --clean`.** **Never reset or delete the consumer group `ms-ml-conv-history-bs`** (the original
-  service's). Ours are `ms-ml-camel-conv-history-bs` (consumer) and `ms-ml-camel-conv-history-sync`; resetting those is allowed only
-  on purpose, with the project stopped.
+- **Never run that repo's `run.sh --clean`.** Our consumer groups are `ms-ml-camel-conv-history-bs` (consumer) and
+  `ms-ml-camel-conv-history-sync`; resetting them is allowed only on purpose, with the project stopped.
 - **Secrets only in `.env`** (git-ignored). Never in chat, in a file, in a log or in a command line you paste. Never run `bash -x` on a
   script that reads `.env`: it prints the values. **Run `./scripts/scan-secrets.sh` before every push**; it looks for the real values
   and prints only counts.
@@ -94,7 +93,6 @@ built-in ones.
 
 | Script | Why |
 |---|---|
-| `scripts/parity-check.sh` | Empties `camel_history`'s three tables. Refuses unless `--wipe-camel-history` |
 | `scripts/clean.sh` | Removes Karavan's containers **and its database volume** (the projects are safe: they are in Git) |
 | `scripts/foundry-cleanup-orphans.sh --delete` | Deletes Foundry conversations. Scoped to our `source` and `--instance`, and refuses with an empty map |
 | `docker rm -f conv-history-*` | Normal when redeploying, but the project is down until you press Run again |

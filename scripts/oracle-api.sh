@@ -8,10 +8,10 @@
 #   - the conversation list, as one page and as pages of 3 followed through the Link header;
 #   - the messages of each conversation, as one page, as pages of 2 walked back from the newest, and as pages of 2 walked
 #     forward from the first message.
-# Times are cut to the millisecond, not rounded: the reference service does UnixMilli()/1000, and so does the API.
+# Times are cut to the millisecond, not rounded: ms-ml-conv-history-bs does UnixMilli()/1000, and so does the API.
 # Messages are compared whole: _id, type, role, authorId, text, received, source and metadata. The text comes from Foundry
 # in the API and from conversation_messages here, so a match is the proof that Foundry holds what our table holds.
-# This replaces the comparison with the Go service, which this phase does not run. Needs curl, jq, the cluster.
+# Needs curl, jq, the cluster.
 
 # shellcheck source=./test-lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/test-lib.sh"

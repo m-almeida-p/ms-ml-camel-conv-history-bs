@@ -37,9 +37,8 @@ Every suite works on **its own rows and topics**: fixtures are keyed with a pref
 at the end, each throwaway topic and consumer group is deleted, and every Foundry conversation a test creates is deleted. The real
 history in `camel_history` (42 messages, 10 conversations at the last count) and the real consumer groups are never touched.
 
-**One script is destructive: `scripts/parity-check.sh`** empties the three `camel_history` tables. It now refuses to run while they
-hold rows unless you pass `--wipe-camel-history`. `test-consumer.sh` used to do the same (a `TRUNCATE`) and was fixed in the same way: it
-deletes only its `t-%` rows. If you add a script, scope every `DELETE` to your own prefix and never `TRUNCATE`.
+**No test empties the `camel_history` tables.** `test-consumer.sh` deletes only its own `t-%` rows. If you add a script, scope every
+`DELETE` to your own prefix and never `TRUNCATE`.
 
 ## JUnit (`tests/camel`)
 

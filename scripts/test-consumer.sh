@@ -11,7 +11,7 @@
 #   - that every offset was committed (no lag), so no poison record blocked a partition.
 #
 # It touches only rows whose conversation id starts with "t-" (it removes them first and afterwards) and its own topic.
-# The real rows of camel_history, the real topic and the history.conversation_* tables of ms-ml-conv-history-bs are never
+# The real rows of camel_history, the real topic and the history.conversation_* tables are never
 # touched. (An earlier version truncated the three tables, which would have wiped the real history the API serves.)
 # Needs: the cluster up, the camel_history migrations applied (ms-ml-conv-history-migrations:
 # make migrations/up FLOW=camel_conversation), python3.

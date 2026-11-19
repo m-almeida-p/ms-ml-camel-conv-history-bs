@@ -411,9 +411,9 @@ section_checker() {
   echo "== checker: the contract check accepts a good response and rejects broken ones"
   local ref="${REPO_DIR}/../ms-ml-conv-history-bs/docs/ms-ml-conv-history-bs-openapi.yml"
   if [ -f "${ref}" ]; then
-    check "the copied contract is identical to the reference service's" "$(shasum "${ref}" | cut -c1-40)" "$(shasum "${REPO_DIR}/docs/contract/ms-ml-conv-history-bs-openapi.yml" | cut -c1-40)"
+    check "the copied contract is identical to the one of ms-ml-conv-history-bs" "$(shasum "${ref}" | cut -c1-40)" "$(shasum "${REPO_DIR}/docs/contract/ms-ml-conv-history-bs-openapi.yml" | cut -c1-40)"
   else
-    echo "   (the reference service's repo is not next to this one: the copy was not compared)"
+    echo "   (the repo of ms-ml-conv-history-bs is not next to this one: the copy was not compared)"
   fi
   local d="${REPO_DIR}/.devmode-local/checker-$$"; mkdir -p "${d}"
   local good='{"conversation":{"_id":"c1"},"messages":[{"_id":"1","type":"text","role":"appUser","authorId":"a","text":"t","received":1.5,"source":{"type":"api"},"metadata":{"sequence":1,"eventName":"UserMessageSent","truncated":false}}]}'

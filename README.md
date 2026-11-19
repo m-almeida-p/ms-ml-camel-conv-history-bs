@@ -13,6 +13,10 @@ agent -> event store -> Debezium -> Kafka -> consumer -> camel_history
                                           -> sync -> Microsoft Foundry <- API <- a client
 ```
 
+The history is also read through [`ms-ml-conv-history-bs`](../ms-ml-conv-history-bs): its API (`:3100`) and its MCP server (`:3200`, the
+history and statistics as tools for an agent) read the tables these projects fill (`camel_history`, or `history` with
+`POSTGRES_SEARCH_PATH`).
+
 ## Documentation
 
 See [docs/](docs/README.md): the design with diagrams, Karavan setup, a guide per project, the Foundry setup,

@@ -53,8 +53,7 @@ flowchart LR
 
 *In words:* the agent and Debezium publish records to a Kafka topic. The consumer reads them, reads each schema from the
 registry once, writes the events to three Postgres tables, and writes any record it cannot store to the dead-letter log.
-The original service, `ms-ml-conv-history-bs`, reads the same topic as another consumer group and writes the same tables
-in the schema `public`: the two never compete.
+The history is read through the API and the MCP server of `ms-ml-conv-history-bs`.
 
 ---
 
@@ -215,8 +214,8 @@ Reading the Designer? Find the step; the **Docs:** line of its note points to th
 | Dead Letter Channel | Every unexpected error, after 3 retries | `errorHandler: deadLetterChannel` |
 | Pipeline | The steps of a route | the default of a route |
 
-The idempotency is the database key `(conversation_id, sequence)`, not Camel's `idempotentConsumer`: the original decides
-"same event, or a different one at the same position" in SQL, and this keeps the two identical.
+The idempotency is the database key `(conversation_id, sequence)`, not Camel's `idempotentConsumer`: "same event, or a different
+one at the same position" is decided in SQL.
 
 ## Camel conventions followed
 

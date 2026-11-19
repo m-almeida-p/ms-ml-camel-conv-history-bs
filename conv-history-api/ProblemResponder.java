@@ -11,7 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Builds the response of a failed request as application/problem+json, like the reference service:
+ * Builds the response of a failed request as application/problem+json, like ms-ml-conv-history-bs:
  *   ApiProblemException        the status, type, title and detail it carries
  *   a dependency that cannot answer (Foundry, the token broker, the database)   503, about:blank
  *   anything else              500, about:blank

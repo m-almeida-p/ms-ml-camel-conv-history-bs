@@ -35,7 +35,7 @@ In `application.properties`; each can be overridden by an environment variable (
 |---|---|---|
 | `app.topic` | `yape.event_store.conversation_events` | The topic to read |
 | `app.kafka.brokers` | `kafka:29092` | Inside the Docker network |
-| `app.kafka.groupId` | `ms-ml-camel-conv-history-sync` | **Its own group.** Never the consumer's or the original service's |
+| `app.kafka.groupId` | `ms-ml-camel-conv-history-sync` | **Its own group.** Never the consumer's |
 | `app.schema.registryUrl`, `allowedIds`, `requireFraming` | as the consumer | The decoder's settings |
 | `app.db.url`, `app.db.user` | `camel_history` on `db:5432` | The datasource |
 | `app.foundry.tokenUrl` | `http://foundry-token:8099/token` | The broker. Not a secret |

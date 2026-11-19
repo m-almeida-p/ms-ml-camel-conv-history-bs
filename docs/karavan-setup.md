@@ -125,7 +125,6 @@ Development aids (they do not use Karavan; see the [consumer guide](conv-history
 |---|---|
 | `./scripts/devmode-local.sh <project> [NAME=value ...]` | Run a project folder of this repo in the DevMode image, on the cluster network. `stop <project>` removes it. |
 | `./scripts/test-consumer.sh` | End-to-end test of `conv-history-consumer` on a throwaway topic (37 checks). It touches only its own `t-` rows. |
-| `./scripts/parity-check.sh --wipe-camel-history` | Compare what the consumer wrote with the original consumer's tables. **Empties the `camel_history` tables**, so it refuses without the flag. |
 | `./scripts/test-all.sh` | Every test of the repository in turn, with one table at the end ([testing.md](testing.md)). |
 
 ## Files Karavan generates in a project

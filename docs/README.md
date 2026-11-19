@@ -1,7 +1,8 @@
 # Documentation
 
 Guides for the Apache Camel Karavan setup in this repository and for the three integrations built with it: the Kafka consumer
-`conv-history-consumer`, the Microsoft Foundry sync `conv-history-sync`, and the history API `conv-history-api`.
+`conv-history-consumer`, the Microsoft Foundry sync `conv-history-sync`, and the history API `conv-history-api`. The history these
+build is also read through the API and the MCP server of [`ms-ml-conv-history-bs`](../../ms-ml-conv-history-bs).
 
 | Guide | Read it when |
 |---|---|
@@ -12,7 +13,7 @@ Guides for the Apache Camel Karavan setup in this repository and for the three i
 | [design-foundry.md](design-foundry.md) | You want the picture of the Foundry side: the sync, the API and the token broker, with diagrams per level. |
 | [foundry-setup.md](foundry-setup.md) | You need to create the Azure identity, start the broker, run the tests, or know what Foundry does (as measured). |
 | [conv-history-sync.md](conv-history-sync.md) | You want to know how a chat message reaches Foundry once: routes, errors, reconciliation, rebuilding a conversation. |
-| [conv-history-api.md](conv-history-api.md) | You want the API: endpoints, cursors, how a page is built from Foundry and Postgres, errors, and where it differs from the reference service. |
+| [conv-history-api.md](conv-history-api.md) | You want the API: endpoints, cursors, how a page is built from Foundry and Postgres, errors, and where it differs from `ms-ml-conv-history-bs`. |
 | [testing.md](testing.md) | You want to run or add a test: every suite and JUnit class, what it proves, the fake Foundry, the mutation experiment, what is not covered. |
 | [troubleshooting.md](troubleshooting.md) | Something failed. Each entry lists the symptom, the cause and the fix. Every entry is a problem we actually hit. |
 | [cheatsheet.md](cheatsheet.md) | You need a command: Docker, Kafka CLI, consumer-group offsets, Git sync. |
@@ -26,14 +27,14 @@ Guides for the Apache Camel Karavan setup in this repository and for the three i
 ├── scripts/                    up / stop / start / logs / clean for the Karavan stack, the local runner
 │                               (devmode-local.sh), the tests (test-*.sh, test-all.sh runs them all, test-camel.sh the JUnit),
 │                               the token broker, the fake Foundry, the checks (oracle-api.sh, check-foundry-sync.sh,
-│                               contract-check.sh, check-docs.py), parity-check.sh (destructive), scan-secrets.sh (run it
+│                               contract-check.sh, check-docs.py), scan-secrets.sh (run it
 │                               before every push) and foundry-cleanup-orphans.sh / foundry-limits-probe.py
 ├── conv-history-consumer/      A Karavan project: the Kafka consumer that builds the conversation history
 ├── conv-history-sync/          A Karavan project: sends every chat message to Microsoft Foundry, once and in order
-├── conv-history-api/           A Karavan project: the history API (the reference contract), reading the messages from Foundry
+├── conv-history-api/           A Karavan project: the history API (the contract of `ms-ml-conv-history-bs`), reading the messages from Foundry
 ├── tests/camel/                JUnit modules api, consumer, sync (and common): they compile the projects' own Java files
 ├── tests/mutation/             The mutation experiment: does any test notice a one-condition change in the code?
-└── docs/                       This documentation; docs/contract/ is the reference service's OpenAPI, unchanged
+└── docs/                       This documentation; docs/contract/ is the OpenAPI of `ms-ml-conv-history-bs`, unchanged
 
 Not in Git: `.env` (secrets), `.test-logs/` (the output of `test-all.sh`), `.devmode-local/` (working copies of the local runner) and
 `temp/` (the workflow documents of the work, in Spanish; see [handoff.md](handoff.md)).
