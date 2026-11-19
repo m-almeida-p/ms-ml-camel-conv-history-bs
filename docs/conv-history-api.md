@@ -106,9 +106,10 @@ So a deployment needs a gateway in front that binds `idYapeAccount` to the calle
 `/messages` unless it keeps its own conversation-to-account mapping or asks the list first. If that gap matters, the fix is an
 optional `idYapeAccount` on `/messages` that must match the conversation's (404 on a mismatch): a contract change, so not made here.
 
-The compose files publish `8086` (API), `8084` (sync), `8081` (consumer), Karavan (`9998`) and its image registry (`5555`) on
-`127.0.0.1` only, so nobody else on the network reaches them. Behind a gateway on another host, publish the API's port as needed,
-and only then.
+Karavan (`9998`) and its image registry (`5555`) are published on `127.0.0.1` only (`docker-compose.yml`). The three services are
+**not**: `8086` (API), `8084` (sync) and `8081` (consumer) listen on all interfaces, so anyone on the same network reaches them.
+Karavan's compose parser reads a port as `host:container` and fails on `127.0.0.1:8086:8080`, so a project's `docker-compose.yaml`
+cannot bind to the loopback. Close them with the host's firewall, or put the API behind a gateway and do not expose it otherwise.
 
 ## Differences from the reference service
 
