@@ -127,7 +127,7 @@ It is a local PoC and says so. Known, accepted by the owner:
 | 6 | Real 429 and 5xx from Foundry, retention in days, limits above the probe | Never observed; see [foundry-setup.md](foundry-setup.md#limits-and-behaviour-measured) |
 | 7 | Kafka eviction and the token race | The sync's poll settings (20 records, 30 minutes) and the token fix are in place but untested against the failure |
 | 8 | `/messages` ownership | An optional `idYapeAccount` that must match the conversation's would close the gap; it changes the contract, so it needs the owner |
-| 9 | Dependency audit | `postgresql` is 42.7.12 (42.7.4 to 42.7.6 had CVE-2025-49146, only with `channelBinding=require`, which is not used here). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions (7.x, 3.x) that were not taken; no vulnerability scan tool was run |
+| 9 | Dependency audit | `postgresql` is declared at 42.7.12 (42.7.4 to 42.7.6 had CVE-2025-49146, only with `channelBinding=require`, which is not used here). **At run time both 42.7.12 and 42.7.13 are on the classpath**: Camel's dependency downloader adds its own driver for a `jdbc:postgresql` URL. Both are past the fix; which one the JVM loads was not determined. HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions (7.x, 3.x) that were not taken. No vulnerability scan tool was run |
 | 10 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
 | 11 | The Foundry service principal's secret expires one year after creation | Recreate with the command in [foundry-setup.md](foundry-setup.md) |
 
