@@ -10,7 +10,7 @@ same HTTP contract as the Go service `ms-ml-conv-history-bs` (copied unchanged i
 
 | Project | Does |
 |---|---|
-| `conv-history-consumer` | Kafka topic `yape.public.conversation_events` (Debezium outbox of the agent's event store) into Postgres schema `camel_history` |
+| `conv-history-consumer` | Kafka topic `yape.event_store.conversation_events` (Debezium outbox of the agent's event store) into Postgres schema `camel_history` |
 | `conv-history-sync` | Copies each chat message into a Foundry conversation, once and in order; keeps the map between our ids and Foundry's |
 | `conv-history-api` | `GET /v1/conversations` (from Postgres) and `GET /v1/conversations/{id}/messages` (text and order from Foundry, the rest from Postgres) |
 

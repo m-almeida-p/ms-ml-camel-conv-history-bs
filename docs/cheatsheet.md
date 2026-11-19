@@ -79,9 +79,9 @@ docker exec yape-kafka kafka-topics --bootstrap-server localhost:9092 --list
 
 # Earliest and latest offset per partition (equal numbers = nothing readable)
 docker exec yape-kafka kafka-run-class kafka.tools.GetOffsetShell \
-  --bootstrap-server localhost:9092 --topic yape.public.conversation_events --time -2   # earliest
+  --bootstrap-server localhost:9092 --topic yape.event_store.conversation_events --time -2   # earliest
 docker exec yape-kafka kafka-run-class kafka.tools.GetOffsetShell \
-  --bootstrap-server localhost:9092 --topic yape.public.conversation_events --time -1   # latest
+  --bootstrap-server localhost:9092 --topic yape.event_store.conversation_events --time -1   # latest
 
 # Who reads the topic
 docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --list
@@ -116,7 +116,7 @@ the real service's group.
    partitions you expect move:
    ```bash
    docker exec yape-kafka kafka-consumer-groups --bootstrap-server localhost:9092 \
-     --group ms-ml-camel-conv-history-bs --topic yape.public.conversation_events \
+     --group ms-ml-camel-conv-history-bs --topic yape.event_store.conversation_events \
      --reset-offsets --by-duration PT60M --dry-run
    ```
    `--by-duration PT60M` means "the first record newer than 60 minutes ago".

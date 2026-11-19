@@ -38,7 +38,7 @@ Nothing is told by color: every meaning is also in a shape, a line style or a la
 ```mermaid
 flowchart LR
     producer(["Agent and Debezium<br/>publish conversation events"])
-    topic(["Kafka topic<br/>yape.public.conversation_events"])
+    topic(["Kafka topic<br/>yape.event_store.conversation_events"])
     consumer["History consumer<br/>this project, on Camel"]
     registry(["Schema Registry<br/>the schema of each record"])
     db[("Postgres, schema camel_history<br/>inbox, messages, summaries")]

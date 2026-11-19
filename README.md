@@ -4,7 +4,7 @@ Apache Camel Karavan projects for the Yape conversation history:
 
 | Project | What it does |
 |---|---|
-| `conv-history-consumer` | Reads `yape.public.conversation_events` and builds the history in Postgres (schema `camel_history`), with schema checks and a dead-letter log. |
+| `conv-history-consumer` | Reads `yape.event_store.conversation_events` and builds the history in Postgres (schema `camel_history`), with schema checks and a dead-letter log. |
 | `conv-history-sync` | Sends every chat message to **Microsoft Foundry**, once and in order, and keeps the map between our ids and Foundry's. |
 | `conv-history-api` | Serves the history with the **same API as `ms-ml-conv-history-bs`**, reading the messages from the Foundry Conversations API. |
 

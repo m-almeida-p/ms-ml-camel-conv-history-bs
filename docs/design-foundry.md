@@ -29,7 +29,7 @@ and the reading map.
 ```mermaid
 flowchart LR
     producer(["Agent and Debezium<br/>publish conversation events"])
-    topic(["Kafka topic<br/>yape.public.conversation_events"])
+    topic(["Kafka topic<br/>yape.event_store.conversation_events"])
     consumer["History consumer<br/>conv-history-consumer"]
     sync["Foundry sync<br/>conv-history-sync"]
     db[("Postgres, schema camel_history<br/>messages, summaries, id maps")]

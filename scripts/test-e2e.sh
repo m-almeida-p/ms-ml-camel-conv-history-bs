@@ -3,7 +3,7 @@
 #
 #   ./scripts/test-e2e.sh [flow]          default flow: card
 #
-#   agent -> public.conversation_events -> Debezium -> topic -> conv-history-consumer -> camel_history
+#   agent -> event_store.conversation_events -> Debezium -> topic -> conv-history-consumer -> camel_history
 #                                                            -> conv-history-sync -> Microsoft Foundry
 #                                                                                       -> conv-history-api (port 8086)
 #
@@ -36,7 +36,7 @@ for c in conv-history-consumer conv-history-sync conv-history-api; do
 done
 [ "${FAILS}" -eq 0 ] || { summary; exit 1; }
 
-before="$(sql "SELECT conversation_id FROM public.conversation_events GROUP BY conversation_id" | sort)"
+before="$(sql "SELECT conversation_id FROM event_store.conversation_events GROUP BY conversation_id" | sort)"
 echo "== running the ${FLOW} flow (about 45 s)"
 t0="$(now)"
 "${EXPLORER}" --flow "${FLOW}" --headless 2>&1 | tail -2 | cut -c1-160
@@ -45,11 +45,11 @@ t_flow="$(since "${t0}")"
 status="$("${EXPLORER}" --status 2>&1 | grep -E "^ +${FLOW} " | head -1)"
 check_contains "the flow completed" "completed" "${status}"
 
-cid="$(comm -13 <(echo "${before}") <(sql "SELECT conversation_id FROM public.conversation_events GROUP BY conversation_id" | sort) | head -1)"
+cid="$(comm -13 <(echo "${before}") <(sql "SELECT conversation_id FROM event_store.conversation_events GROUP BY conversation_id" | sort) | head -1)"
 [ -n "${cid}" ] || { fail "the flow left no new conversation in the event store"; summary; exit 1; }
 echo "   new conversation: ${cid}  (flow took ${t_flow} s)"
-events="$(sql "SELECT count(*) FROM public.conversation_events WHERE conversation_id='${cid}'")"
-chat="$(sql "SELECT count(*) FROM public.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')")"
+events="$(sql "SELECT count(*) FROM event_store.conversation_events WHERE conversation_id='${cid}'")"
+chat="$(sql "SELECT count(*) FROM event_store.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')")"
 echo "   ${events} events, ${chat} of them chat messages"
 t1="$(now)"
 
@@ -61,17 +61,17 @@ hop() { # label, timeout, shell condition
 echo "== the hops, in order"
 hop "stored in camel_history (consumer)" 120 "[ \"\$(sql \"SELECT count(*) FROM camel_history.conversation_messages WHERE conversation_id='${cid}'\")\" = ${chat} ]" || true
 hop "in Foundry, mapped (sync)" 120 "[ \"\$(sql \"SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='${cid}'\")\" = ${chat} ]" || true
-account="$(sql "SELECT id_yape_account FROM public.conversation_events WHERE conversation_id='${cid}' AND id_yape_account IS NOT NULL LIMIT 1")"
+account="$(sql "SELECT id_yape_account FROM event_store.conversation_events WHERE conversation_id='${cid}' AND id_yape_account IS NOT NULL LIMIT 1")"
 hop "listed by the API" 60 "curl -s -m 10 '${API}/v1/conversations?idYapeAccount=${account}' | jq -e '[.conversations[]._id] | index(\"${cid}\")' >/dev/null" || true
 
 echo "== what the API serves, against the events themselves"
 messages="$(curl -s -m 20 "${API}/v1/conversations/${cid}/messages")"
 expected="$(sql "SELECT coalesce(json_agg(CASE event_name WHEN 'GuardrailResponseSent' THEN payload::json->>'response_text' ELSE payload::json->>'text' END ORDER BY sequence), '[]')
-                 FROM public.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')")"
+                 FROM event_store.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')")"
 check "as many messages as chat events" "${chat}" "$(echo "${messages}" | jq '.messages | length')"
 check "the same texts, in the same order, as the events" "$(echo "${expected}" | jq -c .)" "$(echo "${messages}" | jq -c '[.messages[].text]')"
-check "roles: the user, then the assistant" "$(sql "SELECT coalesce(json_agg(CASE event_name WHEN 'UserMessageSent' THEN 'appUser' ELSE 'appMaker' END ORDER BY sequence), '[]') FROM public.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')" | jq -c .)" "$(echo "${messages}" | jq -c '[.messages[].role]')"
-check "_id is the sequence of the event" "$(sql "SELECT coalesce(json_agg(sequence::text ORDER BY sequence), '[]') FROM public.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')" | jq -c .)" "$(echo "${messages}" | jq -c '[.messages[]._id]')"
+check "roles: the user, then the assistant" "$(sql "SELECT coalesce(json_agg(CASE event_name WHEN 'UserMessageSent' THEN 'appUser' ELSE 'appMaker' END ORDER BY sequence), '[]') FROM event_store.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')" | jq -c .)" "$(echo "${messages}" | jq -c '[.messages[].role]')"
+check "_id is the sequence of the event" "$(sql "SELECT coalesce(json_agg(sequence::text ORDER BY sequence), '[]') FROM event_store.conversation_events WHERE conversation_id='${cid}' AND event_name IN ('UserMessageSent','AgentMessageSent','GuardrailResponseSent')" | jq -c .)" "$(echo "${messages}" | jq -c '[.messages[]._id]')"
 check "the Foundry conversation carries our id" "${cid}" "$(foundry GET "/openai/v1/conversations/$(sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map WHERE conversation_id='${cid}'")" >/dev/null; echo "${BODY}" | jq -r '.metadata.conversation_id')"
 echo "== and the oracle for everything"
 "${REPO_DIR}/scripts/oracle-api.sh" "${API}" | tail -2 | sed 's/^/   /'

@@ -56,7 +56,7 @@ In `application.properties`. Any `app.*` value can be overridden by an environme
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `app.topic` | `yape.public.conversation_events` | Topic to read. |
+| `app.topic` | `yape.event_store.conversation_events` | Topic to read. |
 | `app.kafka.brokers` | `kafka:29092` | The cluster's internal listener (from the host: `localhost:9092`). |
 | `app.kafka.groupId` | `ms-ml-camel-conv-history-bs` | Different from the original's group, so they never compete. |
 | `app.schema.registryUrl` | `http://schema-registry:8081` | Where schemas are read. |
@@ -159,7 +159,7 @@ because the line keeps the body, the records can be replayed after the fix.
 One line per poison record, on its own logger, `dlq`, at `ERROR`:
 
 ```
-DLQ reason=field-range field=conversation_id topic=yape.public.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - body=\x00\x00\x00\x00\x02{"conversation_id": "bad id", "sequence": 1, ...}
+DLQ reason=field-range field=conversation_id topic=yape.event_store.conversation_events partition=3 offset=19 key=\x00\x00\x00\x00\x01{"conversation_id":"bad id"} detail=not 1 to 128 of letters, digits and . _ : - body=\x00\x00\x00\x00\x02{"conversation_id": "bad id", "sequence": 1, ...}
 ```
 
 | Part | Meaning |
@@ -240,7 +240,7 @@ Three scripts, all against the local cluster; the first two use **throwaway topi
 |---|---|---|
 | `./scripts/test-consumer.sh` | 37 checks. Chat, non-chat, duplicate and conflicting events; summary counts; 19 dead-lettered records, each with its exact reason (17 poison, and 2 that the store refuses: a NUL in a text and in a jsonb); a tombstone; no lag (no poison record blocks a partition); an unreachable database is retried, not dead-lettered, and recovers; an unexpected error is dead-lettered after 3 retries. | about 1.5 min |
 | `./scripts/test-camel.sh consumer` | 81 JUnit tests: the decoder at the edges of every field (66, against the real Schema Registry), and routes 2 and 3 on the real Postgres (15: stored, duplicate, conflict, NUL, a million characters, 16 threads on one event, 30 on one conversation). About 25 s. | |
-| `./scripts/parity-check.sh` | Replays the 96 rows of `public.conversation_events` as Debezium would, and compares the three `camel_history` tables with the original consumer's `public` tables, every column, both directions. | about 25 s |
+| `./scripts/parity-check.sh` | Replays the 96 rows of `event_store.conversation_events` as Debezium would, and compares the three `camel_history` tables with the original consumer's `public` tables, every column, both directions. | about 25 s |
 
 `test-consumer.sh` touches only the rows whose conversation id starts with `t-` (it deletes them before and after), and the JUnit tests only rows keyed `jt-`.
 **`parity-check.sh` TRUNCATES the three `camel_history` tables (inbox, messages, summaries) before and after**, which would wipe the live history the sync and the API

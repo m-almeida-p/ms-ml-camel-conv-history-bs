@@ -7,10 +7,10 @@
 # while they hold rows, unless you pass --wipe-camel-history. Since the Foundry work those tables hold the live history, which cannot
 # be rebuilt without the producer flow. Run it only on a cluster whose history you can lose; the other tests touch only their own rows.
 #
-# It replays every row of public.conversation_events (the agent's event store, which Debezium publishes) as a
+# It replays every row of event_store.conversation_events (the agent's event store, which Debezium publishes) as a
 # Debezium-formatted record (Schema Registry header with the cluster's schema id + JSON, the JSONB columns as
 # strings) onto a THROWAWAY topic, runs the Camel consumer on it, and then compares the three tables it wrote
-# (camel_history.*) with the three the original consumer wrote (public.conversation_inbox, _messages and
+# (camel_history.*) with the three the original consumer wrote (history.conversation_inbox, _messages and
 # _summaries): every column of every row, in both directions. It also checks that nothing was dead-lettered.
 #
 # The public tables are only read.
@@ -63,8 +63,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EVENTS="$(sql "SELECT count(*) FROM public.conversation_events")"
-echo "🧪  replaying ${EVENTS} events of public.conversation_events (schema id ${SCHEMA_ID}) on topic ${TOPIC}"
+EVENTS="$(sql "SELECT count(*) FROM event_store.conversation_events")"
+echo "🧪  replaying ${EVENTS} events of event_store.conversation_events (schema id ${SCHEMA_ID}) on topic ${TOPIC}"
 sql "TRUNCATE camel_history.conversation_summaries, camel_history.conversation_messages, camel_history.conversation_inbox" >/dev/null
 "${KAFKA[@]}" kafka-topics --bootstrap-server kafka:29092 --create --topic "${TOPIC}" --partitions 3 --replication-factor 1 >/dev/null 2>&1
 
@@ -83,7 +83,7 @@ sql "SELECT json_build_object(
         'payload', payload::text, 'metadata', metadata::text, 'correlation_id', correlation_id,
         'id_yape_account', id_yape_account, 'actor', actor, 'flow', flow,
         'occurred_at', to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))::text
-     FROM public.conversation_events ORDER BY conversation_id, sequence" \
+     FROM event_store.conversation_events ORDER BY conversation_id, sequence" \
 | SCHEMA_ID="${SCHEMA_ID}" python3 -I -c '
 import json, os, sys
 sid = int(os.environ["SCHEMA_ID"])
