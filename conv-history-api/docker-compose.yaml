@@ -4,6 +4,6 @@ services:
     image: conv-history-api
     restart: always
     ports:
-      - "127.0.0.1:8086:8080"   # the host only: this service has no authentication
+      - "8086:8080"
     networks:
       - karavan
