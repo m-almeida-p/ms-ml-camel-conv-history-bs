@@ -16,7 +16,7 @@ Last full run, 2026-11-18, on the final code: **all 10 suites green**.
 | `test-api.sh` | 273 checks | Cluster, the fake Foundry |
 | `test-cleanup-orphans.sh` | 23 checks | The real Foundry |
 | `oracle-api.sh` | 54 checks | The Karavan-run API |
-| `check-foundry-sync.sh` | 9 conversations, 38 items | The real Foundry, the Karavan-run projects |
+| `check-foundry-sync.sh` | 10 conversations, 42 items | The real Foundry, the Karavan-run projects |
 | `test-e2e.sh` | 13 checks | VPN, the producer agent, the three projects. **Not part of `test-all.sh`** |
 
 ## One command
@@ -35,7 +35,7 @@ each. A suite that fails prints its first failing lines; read the log for the re
 
 Every suite works on **its own rows and topics**: fixtures are keyed with a prefix (`t-`, `ts-`, `ta-`, `tco-`, `jt-`) and removed
 at the end, each throwaway topic and consumer group is deleted, and every Foundry conversation a test creates is deleted. The real
-history in `camel_history` (the 38 messages, 9 conversations) and the real consumer groups are never touched.
+history in `camel_history` (42 messages, 10 conversations at the last count) and the real consumer groups are never touched.
 
 **One script is destructive: `scripts/parity-check.sh`** empties the three `camel_history` tables. It now refuses to run while they
 hold rows unless you pass `--wipe-camel-history`. `test-consumer.sh` used to do the same (a `TRUNCATE`) and was fixed in the same way: it
@@ -129,4 +129,4 @@ on macOS Docker cannot see `/private/tmp`, Maven finds an empty folder and repor
   tested, but Foundry's own throttling is unobserved. See [foundry-setup.md](foundry-setup.md#limits-and-behaviour-measured).
 - The Kafka eviction from a group (`max.poll.interval.ms`) that the sync's poll settings guard against was not provoked.
 - The token race in the API's `FoundryReader` is fixed by construction, with no test that fails without the fix.
-- `test-e2e.sh` was not rerun after the latest changes (it needs the VPN and the agent).
+- `test-e2e.sh` (the real producer flow) was last run on 2026-11-18 and passed; rerun it after a change to the chain. It is not part of `test-all.sh`.

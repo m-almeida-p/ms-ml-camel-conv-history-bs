@@ -26,7 +26,7 @@ account. So Postgres stays as the index and holds everything Foundry drops. See 
 | Running in Karavan | `conv-history-consumer` (8081), `conv-history-sync` (8084), `conv-history-api` (8086), all `healthy`, consumer lag 0, on the final code |
 | Last full test run | All 10 suites green: 421 JUnit tests and the system suites ([testing.md](testing.md)) |
 | Git | Everything is committed and pushed to `origin/main` (Karavan reads this repository from GitHub) |
-| Real data | 9 conversations, 38 messages, 108 events in `camel_history`; Foundry holds the same 9 conversations (checked item by item) |
+| Real data | 10 conversations, 42 messages, 119 events in `camel_history`; Foundry holds the same 10 conversations (checked item by item) |
 
 The phase documents (spec, plan, build, test, review, simplify) are in `temp/foundry-conversations/phase-N-*.md`, written in
 **Spanish** at the owner's request. `temp/` is git-ignored: they exist only in the owner's working copy. The workflow that produced
@@ -120,14 +120,14 @@ It is a local PoC and says so. Known, accepted by the owner:
 | # | What | Notes |
 |---|---|---|
 | 1 | **Phase 7 (ship)** | Not started: a pre-launch checklist, what to watch, how to undo. It should say plainly what is above |
-| 2 | `test-e2e.sh` not rerun | Needs the VPN and the producer agent. The code changed since its last run (decoder, `StoreRefusal`, headers, gap repair, rebuild order, simplification). Run it before this goes anywhere shared |
+| 2 | `test-e2e.sh` | **Rerun and green on 2026-11-18** (phase 7), on the code before the pgjdbc bump. Needs the VPN and the producer agent; it adds one conversation to the shared event store |
 | 3 | Rule for Kafka commit failures | `CommitFailedException` and `RebalanceInProgressException` are in no `onException` rule, so one would be dead-lettered as `unexpected`. Add a rule that ignores them (the record redelivers); not done because it could not be provoked to test |
 | 4 | `createConversation` leaks a Foundry conversation per retry | It is a POST and a GET in one step; if the GET fails (429, 5xx) the whole step repeats. Fix like `rebuild`: keep the created id in an exchange property and redo only the GET. Only matters under throttling |
 | 5 | The sync waits 10 minutes for the consumer, then skips | `app.sync.projectionWaitSeconds=600`. A skipped message is sent with the next one of its conversation, but if it was the last one the conversation stays short in Foundry until another arrives. A durable "dead-lettered" marker written by the consumer would make the sync skip only what was truly refused |
 | 6 | Real 429 and 5xx from Foundry, retention in days, limits above the probe | Never observed; see [foundry-setup.md](foundry-setup.md#limits-and-behaviour-measured) |
 | 7 | Kafka eviction and the token race | The sync's poll settings (20 records, 30 minutes) and the token fix are in place but untested against the failure |
 | 8 | `/messages` ownership | An optional `idYapeAccount` that must match the conversation's would close the gap; it changes the contract, so it needs the owner |
-| 9 | Dependency versions | `postgresql:42.7.4` is old; run a dependency audit |
+| 9 | Dependency audit | `postgresql` is 42.7.12 (42.7.4 to 42.7.6 had CVE-2025-49146, only with `channelBinding=require`, which is not used here). HikariCP 6.2.1 and json-schema-validator 1.5.6 have newer **major** versions (7.x, 3.x) that were not taken; no vulnerability scan tool was run |
 | 10 | The owner's migrations `000001`-`000004` | Uncommitted in the producer repo. The tables here depend on them |
 | 11 | The Foundry service principal's secret expires one year after creation | Recreate with the command in [foundry-setup.md](foundry-setup.md) |
 
