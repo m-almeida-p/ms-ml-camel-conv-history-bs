@@ -99,6 +99,9 @@ public class FoundryClient {
         Map<?, ?> mapRow = exchange.getMessage().getHeader("convMapRow", Map.class);
         String lastItemId = exchange.getMessage().getHeader("lastItemRow", String.class); // one column: the value itself
         List<Map<String, Object>> candidates = exchange.getMessage().getHeader("candidates", List.class);
+        if (candidates == null) {
+            candidates = List.of();
+        }
         int current = exchange.getMessage().getHeader("sequence", Integer.class);
         String base = "/openai/v1/conversations/" + mapRow.get("foundry_conversation_id");
 
@@ -111,86 +114,137 @@ public class FoundryClient {
 
         // Foundry only appends. A message below the last synced sequence cannot be put in its place: rebuild.
         if (current < ((Number) mapRow.get("last_synced_sequence")).intValue()) {
-            exchange.getMessage().setHeader("reconcileMismatch", true);
-            exchange.getMessage().setHeader("rebuildReason", "late-event");
+            needsRebuild(exchange, "late-event");
             return;
         }
 
         Answer trailing = call(exchange, "GET", base + "/items?order=asc&limit=100" + (lastItemId == null ? "" : "&after=" + lastItemId), null);
         if (trailing.status() == 404) {
-            exchange.getMessage().setHeader("foundryGone", true);
-            exchange.getMessage().setHeader("rebuildReason", "gone");
+            foundryGone(exchange);
             return;
         }
-        JsonNode list = JSON.readTree(trailing.body());
-        JsonNode items = list.path("data");
         ArrayNode record = JSON.createArrayNode();
-        boolean adoptedCurrent = false;
-        int next = 0;
-        boolean mismatch = list.path("has_more").asBoolean(false);
-        for (int i = 0; !mismatch && i < items.size(); i++) {
-            int found = -1;
-            for (int k = next; candidates != null && k < candidates.size(); k++) {
-                if (sameMessage(items.get(i), String.valueOf(candidates.get(k).get("role")), String.valueOf(candidates.get(k).get("text")))) {
-                    found = k;
-                    break;
-                }
-            }
-            if (found < 0) {
-                mismatch = true;
-                break;
-            }
-            int sequence = ((Number) candidates.get(found).get("sequence")).intValue();
-            record.addObject().put("sequence", sequence).put("itemId", items.get(i).path("id").asText());
-            adoptedCurrent |= sequence == current;
-            next = found + 1;
-        }
-        if (mismatch) {
-            exchange.getMessage().setHeader("reconcileMismatch", true);
-            exchange.getMessage().setHeader("rebuildReason", "unknown-items");
+        Adoption adoption = adopt(JSON.readTree(trailing.body()), candidates, current, record);
+        if (adoption.unaccountedFor()) {
+            needsRebuild(exchange, "unknown-items");
             return;
         }
+
         // The stored messages up to the current one that Foundry does not hold go now, in order, so Foundry has no gap: an earlier
         // record may have been skipped (dead-lettered after the wait for the consumer, or refused). If Foundry already holds a
         // LATER one, or the current message is beyond the candidates' window, appending cannot put them in place: rebuild.
-        java.util.Set<Integer> held = new java.util.HashSet<>();
-        int highestHeld = 0;
-        for (JsonNode entry : record) {
-            held.add(entry.path("sequence").asInt());
-            highestHeld = Math.max(highestHeld, entry.path("sequence").asInt());
-        }
-        List<Map<String, Object>> missing = new ArrayList<>();
-        boolean currentListed = false;
-        for (int k = 0; candidates != null && k < candidates.size(); k++) {
-            int sequence = ((Number) candidates.get(k).get("sequence")).intValue();
-            if (sequence > current) {
-                break;
-            }
-            currentListed |= sequence == current;
-            if (!held.contains(sequence)) {
-                missing.add(candidates.get(k));
-            }
-        }
-        boolean gapBelowHeld = !missing.isEmpty() && ((Number) missing.get(0).get("sequence")).intValue() < highestHeld;
-        if (gapBelowHeld || (!currentListed && !adoptedCurrent)) {
-            exchange.getMessage().setHeader("reconcileMismatch", true);
-            exchange.getMessage().setHeader("rebuildReason", "unknown-items");
+        List<Map<String, Object>> missing = notHeld(candidates, current, record);
+        boolean currentBeyondWindow = !adoption.currentAdopted() && !hasSequence(candidates, current);
+        boolean missingBelowHeld = !missing.isEmpty() && sequenceOf(missing.get(0)) < highestSequence(record);
+        if (currentBeyondWindow || missingBelowHeld) {
+            needsRebuild(exchange, "unknown-items");
             return;
         }
         for (Map<String, Object> message : missing) {
-            ObjectNode body = JSON.createObjectNode();
-            body.putArray("items").add(item(String.valueOf(message.get("role")), String.valueOf(message.get("text"))));
-            Answer added = call(exchange, "POST", base + "/items", body.toString());
+            Answer added = call(exchange, "POST", base + "/items", itemsBody(message));
             if (added.status() == 404) {
-                exchange.getMessage().setHeader("foundryGone", true);
-                exchange.getMessage().setHeader("rebuildReason", "gone");
+                foundryGone(exchange);
                 return;
             }
-            record.addObject().put("sequence", ((Number) message.get("sequence")).intValue()).put("itemId", firstItemId(added.body()));
+            record.addObject().put("sequence", sequenceOf(message)).put("itemId", firstItemId(added.body()));
         }
         exchange.getMessage().setHeader("adoptJson", record.toString());
         exchange.getMessage().setHeader("adoptCount", record.size());
-        exchange.getMessage().setHeader("adoptedCurrent", adoptedCurrent);
+        exchange.getMessage().setHeader("adoptedCurrent", adoption.currentAdopted());
+    }
+
+    /** What the items Foundry holds after the last mapped one say: whether one is unexplained, and whether the current message is there. */
+    private record Adoption(boolean unaccountedFor, boolean currentAdopted) {
+    }
+
+    /**
+     * Matches the items Foundry holds after the last mapped one, in order, with the candidates, and adds each match to the record. An
+     * item no candidate explains, or more than one page of them (has_more), is "unaccounted for".
+     */
+    private static Adoption adopt(JsonNode list, List<Map<String, Object>> candidates, int current, ArrayNode record) {
+        if (list.path("has_more").asBoolean(false)) {
+            return new Adoption(true, false);
+        }
+        boolean currentAdopted = false;
+        int next = 0;
+        for (JsonNode item : list.path("data")) {
+            int found = indexOfMatch(item, candidates, next);
+            if (found < 0) {
+                return new Adoption(true, currentAdopted);
+            }
+            int sequence = sequenceOf(candidates.get(found));
+            record.addObject().put("sequence", sequence).put("itemId", item.path("id").asText());
+            currentAdopted |= sequence == current;
+            next = found + 1;
+        }
+        return new Adoption(false, currentAdopted);
+    }
+
+    /** The first candidate from the given position that is the Foundry item, or -1. */
+    private static int indexOfMatch(JsonNode item, List<Map<String, Object>> candidates, int from) {
+        for (int k = from; k < candidates.size(); k++) {
+            if (sameMessage(item, String.valueOf(candidates.get(k).get("role")), String.valueOf(candidates.get(k).get("text")))) {
+                return k;
+            }
+        }
+        return -1;
+    }
+
+    /** The candidates up to the current message (they come in sequence order) that are not in the record: what Foundry still lacks. */
+    private static List<Map<String, Object>> notHeld(List<Map<String, Object>> candidates, int current, ArrayNode record) {
+        List<Map<String, Object>> missing = new ArrayList<>();
+        for (Map<String, Object> candidate : candidates) {
+            int sequence = sequenceOf(candidate);
+            if (sequence > current) {
+                break;
+            }
+            if (!isRecorded(record, sequence)) {
+                missing.add(candidate);
+            }
+        }
+        return missing;
+    }
+
+    private static boolean isRecorded(ArrayNode record, int sequence) {
+        for (JsonNode entry : record) {
+            if (entry.path("sequence").asInt() == sequence) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int highestSequence(ArrayNode record) {
+        int highest = 0;
+        for (JsonNode entry : record) {
+            highest = Math.max(highest, entry.path("sequence").asInt());
+        }
+        return highest;
+    }
+
+    private static boolean hasSequence(List<Map<String, Object>> messages, int sequence) {
+        return messages.stream().anyMatch(message -> sequenceOf(message) == sequence);
+    }
+
+    private static int sequenceOf(Map<String, Object> message) {
+        return ((Number) message.get("sequence")).intValue();
+    }
+
+    private static void needsRebuild(Exchange exchange, String reason) {
+        exchange.getMessage().setHeader("reconcileMismatch", true);
+        exchange.getMessage().setHeader("rebuildReason", reason);
+    }
+
+    private static void foundryGone(Exchange exchange) {
+        exchange.getMessage().setHeader("foundryGone", true);
+        exchange.getMessage().setHeader("rebuildReason", "gone");
+    }
+
+    /** The body of an add-items call for one stored message (sequence, role, text). */
+    private static String itemsBody(Map<String, Object> message) {
+        ObjectNode body = JSON.createObjectNode();
+        body.putArray("items").add(item(String.valueOf(message.get("role")), String.valueOf(message.get("text"))));
+        return body.toString();
     }
 
     /** True when the Foundry item is the message: the same role, and the same text. */
@@ -239,17 +293,15 @@ public class FoundryClient {
         exchange.setProperty("rebuildAttempt", fid);
 
         ArrayNode record = JSON.createArrayNode();
-        record.addObject().put("sequence", ((Number) messages.get(0).get("sequence")).intValue())
+        record.addObject().put("sequence", sequenceOf(messages.get(0)))
                 .put("itemId", firstItemId(call(exchange, "GET", "/openai/v1/conversations/" + fid + "/items?order=asc&limit=1", null).body()));
         for (int i = 1; i < messages.size(); i++) {
-            ObjectNode body = JSON.createObjectNode();
-            body.putArray("items").add(item(String.valueOf(messages.get(i).get("role")), String.valueOf(messages.get(i).get("text"))));
-            record.addObject().put("sequence", ((Number) messages.get(i).get("sequence")).intValue())
-                    .put("itemId", firstItemId(call(exchange, "POST", "/openai/v1/conversations/" + fid + "/items", body.toString()).body()));
+            record.addObject().put("sequence", sequenceOf(messages.get(i)))
+                    .put("itemId", firstItemId(call(exchange, "POST", "/openai/v1/conversations/" + fid + "/items", itemsBody(messages.get(i))).body()));
         }
         exchange.getMessage().setHeader("foundryConversationId", fid);
         exchange.getMessage().setHeader("rebuildJson", record.toString());
-        exchange.getMessage().setHeader("rebuildLast", ((Number) messages.get(messages.size() - 1).get("sequence")).intValue());
+        exchange.getMessage().setHeader("rebuildLast", sequenceOf(messages.get(messages.size() - 1)));
         exchange.removeProperty("rebuildAttempt");
     }
 
