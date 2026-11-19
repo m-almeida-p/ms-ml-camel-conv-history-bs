@@ -1,6 +1,7 @@
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.camel.BindToRegistry;
@@ -38,15 +39,18 @@ public class ProblemResponder {
      */
     static boolean dependencyDown(Throwable failure) {
         for (Throwable t = failure; t != null; t = t.getCause()) {
-            if (t instanceof IOException || t instanceof UncheckedIOException) {
+            if (t instanceof IOException || t instanceof UncheckedIOException || isDatabaseDown(t)) {
                 return true;
             }
-            for (String name : DATABASE_DOWN) {
-                for (Class<?> c = t.getClass(); c != null; c = c.getSuperclass()) {
-                    if (c.getName().equals(name)) {
-                        return true;
-                    }
-                }
+        }
+        return false;
+    }
+
+    /** True when the exception is one of the DATABASE_DOWN classes or a subclass of one (matched by name: Spring may not be on the classpath). */
+    private static boolean isDatabaseDown(Throwable t) {
+        for (Class<?> c = t.getClass(); c != null; c = c.getSuperclass()) {
+            if (Arrays.asList(DATABASE_DOWN).contains(c.getName())) {
+                return true;
             }
         }
         return false;

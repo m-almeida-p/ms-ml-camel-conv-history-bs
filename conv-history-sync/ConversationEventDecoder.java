@@ -1,3 +1,5 @@
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -373,20 +375,20 @@ public class ConversationEventDecoder {
                 // does not know (a setting error). The route retries these forever, with a WARN each time, and
                 // never dead-letters the record for it. They are thrown as UncheckedIOException, which the
                 // route's retry-forever rule matches.
-                throw new java.io.IOException("the schema registry answered " + response.statusCode() + " for schema id " + id);
+                throw new IOException("the schema registry answered " + response.statusCode() + " for schema id " + id);
             }
             JsonNode body = JSON.readTree(response.body());
             if (!"JSON".equals(body.path("schemaType").asText("AVRO"))) {
-                throw new java.io.IOException("schema id " + id + " is not a JSON Schema");
+                throw new IOException("schema id " + id + " is not a JSON Schema");
             }
             JsonSchema schema = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7).getSchema(body.get("schema").asText());
             schemas.put(id, schema);
             return schema;
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException("cannot validate: schema id " + id + " is not available from the schema registry: " + e.getMessage(), e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("cannot validate: schema id " + id + " is not available from the schema registry: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new java.io.UncheckedIOException("interrupted while reading schema id " + id, new java.io.IOException(e));
+            throw new UncheckedIOException("interrupted while reading schema id " + id, new IOException(e));
         }
     }
 
