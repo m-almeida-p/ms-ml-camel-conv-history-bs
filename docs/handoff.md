@@ -52,8 +52,8 @@ Needs the shared cluster up (`../cluster/scripts/up.sh`, network `yape-local`) a
 These stand until the owner changes them.
 
 - **Never run the Go service** (`ms-ml-conv-history-bs`) or its consumer. The oracle (`scripts/oracle-api.sh`) replaces parity with it.
-- **Never commit in `../ml-genai-agents-bs-testing`.** It is the producer repo and holds the owner's uncommitted migrations
-  `000001` to `000004`, a README and `scripts/check-migrations.sh`. A **new table goes through a migration there**, not through SQL here.
+- **Never commit in `../ml-genai-agents-bs-testing`.** It is the producer repo. **A new table goes through a migration in
+  `../ms-ml-conv-history-migrations`** (the history migrations, copied from the producer repo, live there), not through SQL here.
 - **Never run that repo's `run.sh --clean`.** **Never reset or delete the consumer group `ms-ml-conv-history-bs`** (the original
   service's). Ours are `ms-ml-camel-conv-history-bs` (consumer) and `ms-ml-camel-conv-history-sync`; resetting those is allowed only
   on purpose, with the project stopped.

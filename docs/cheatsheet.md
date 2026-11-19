@@ -55,8 +55,8 @@ docker exec yape-postgres psql -U postgres -d postgres -c "
          (SELECT count(*) FROM camel_history.conversation_messages) AS messages,
          (SELECT count(*) FROM camel_history.conversation_summaries) AS summaries
   UNION ALL
-  SELECT 'public (original)', (SELECT count(*) FROM public.conversation_inbox),
-         (SELECT count(*) FROM public.conversation_messages), (SELECT count(*) FROM public.conversation_summaries)"
+  SELECT 'history (original)', (SELECT count(*) FROM history.conversation_inbox),
+         (SELECT count(*) FROM history.conversation_messages), (SELECT count(*) FROM history.conversation_summaries)"
 ```
 
 ### Local runner and tests (no Karavan)

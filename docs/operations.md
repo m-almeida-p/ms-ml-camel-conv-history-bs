@@ -68,7 +68,7 @@ mismatch; a `DLQ reason=unexpected`; lag that does not fall; an API 5xx that was
 4. Verify: `./scripts/oracle-api.sh`, `./scripts/check-foundry-sync.sh`, lag 0.
 5. Tell the owner what was reverted and why.
 
-**Data.** There are no migrations in this repository (the `camel_history` tables are migrated from `ml-genai-agents-bs-testing`), so a
+**Data.** There are no migrations in this repository (the `camel_history` tables are migrated from `ms-ml-conv-history-migrations`), so a
 rollback never needs a schema step. What the code wrote stays valid under older code: the item map and the conversation map keep
 their shape, and Foundry's `metadata.instance` is only read by the cleanup script (a conversation without it counts as `default`).
 A rebuild that was in progress leaves, at worst, one extra Foundry conversation that `foundry-cleanup-orphans.sh` removes.

@@ -26,9 +26,9 @@ Records that fail validation or that the store refuses go to route 3. A database
 forever and the offset does not move. Anything unexpected is retried 3 times, then goes to route 3 as `reason=unexpected`.
 
 The tables live in the schema **`camel_history`** of the cluster's Postgres, apart from the original consumer's
-`public.conversation_*` tables, so both can run and be compared. Their DDL is the migration folder
-`history/camel_conversation` of `ml-genai-agents-bs-testing`
-(`make migrations/up SERVICE=history FLOW=camel_conversation`).
+`history.conversation_*` tables, so both can run and be compared. Their DDL is the migration folder
+`history/camel_conversation` of the repository `ms-ml-conv-history-migrations`
+(`make migrations/up FLOW=camel_conversation` there).
 
 ## Project files
 
