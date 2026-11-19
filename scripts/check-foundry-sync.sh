@@ -8,7 +8,9 @@
 #   - it holds exactly the chat messages of conversation_messages that are in foundry_item_map, in sequence order,
 #   - each item has the same role (user/assistant) and the same text as the stored message,
 #   - each item id is the one the map records.
-# It also lists the conversations of the Foundry project that the map does not know (orphans). Prints OK or MISMATCH.
+# It also counts the conversations of the Foundry project that the map does not know (orphans): those of our source and of the
+# instance FOUNDRY_INSTANCE (default "default", the sync's app.foundry.instance), over every page of the listing. Prints OK or MISMATCH.
+# Limit: it reads at most 100 items of a conversation (one page).
 # Needs the FOUNDRY_* variables in .env, curl, jq.
 
 # shellcheck source=./test-lib.sh
@@ -38,9 +40,17 @@ for cid in $(sql "SELECT conversation_id FROM camel_history.foundry_conversation
   printf '%-48s %-6s %-6s %s\n' "${cid:0:48}" "$(sql "SELECT count(*) FROM camel_history.foundry_item_map WHERE conversation_id='${cid}'")" "${n}" "${result}"
 done
 
-foundry GET "/openai/v1/conversations?limit=100&order=desc"
 known="$(sql "SELECT foundry_conversation_id FROM camel_history.foundry_conversation_map" | sort)"
-orphans="$(echo "${BODY}" | jq -r '.data[] | select(.metadata.source=="ms-ml-camel-conv-history-bs") | .id' | sort | comm -23 - <(echo "${known}") | wc -l | tr -d ' ')"
+INSTANCE="${FOUNDRY_INSTANCE:-default}"
+ours=""; after=""
+while :; do
+  foundry GET "/openai/v1/conversations?limit=100&order=desc${after:+&after=${after}}"
+  [ "${STATUS}" = 200 ] || { echo "❌  Foundry answered ${STATUS} when listing the conversations" >&2; exit 1; }
+  ours+="$(echo "${BODY}" | jq -r --arg instance "${INSTANCE}" '.data[] | select(.metadata.source=="ms-ml-camel-conv-history-bs" and ((.metadata.instance // "default") == $instance)) | .id')"$'\n'
+  [ "$(echo "${BODY}" | jq -r .has_more)" = true ] || break
+  after="$(echo "${BODY}" | jq -r .last_id)"
+done
+orphans="$( { printf '%s' "${ours}" | grep . || true; } | sort | comm -23 - <(echo "${known}") | wc -l | tr -d ' ')"
 echo
 echo "conversations checked: ${convs}, items checked: ${items}, orphans (ours in Foundry, not in the map): ${orphans}"
 if [ "${bad}" -eq 0 ] && [ "${orphans}" -eq 0 ]; then echo "✅  OK: Foundry holds exactly what camel_history says"; else echo "❌  MISMATCH: ${bad} conversation(s) differ, ${orphans} orphan(s)"; exit 1; fi

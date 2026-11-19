@@ -16,7 +16,7 @@
 # The log starts with a "Fetching project null files from Platform" ConnectException. It is harmless: the image
 # tries to download the project from Karavan first, and with no Karavan project id it falls back to the files
 # in the folder it was given.
-# This is a development aid. Use Karavan (Containers tab > Run) to run the project the normal way.
+# This is a development aid. Use Karavan (the Run button at the top right of the project) to run the project the normal way.
 
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

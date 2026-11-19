@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Proves the Camel consumer builds the same history as the original consumer (ms-ml-conv-history-bs).
 #
-#   ./scripts/parity-check.sh
+#   ./scripts/parity-check.sh --wipe-camel-history
+#
+# DESTRUCTIVE. It empties camel_history.conversation_inbox, _messages and _summaries (the history the API serves), so it refuses to run
+# while they hold rows, unless you pass --wipe-camel-history. Since the Foundry work those tables hold the live history, which cannot
+# be rebuilt without the producer flow. Run it only on a cluster whose history you can lose; the other tests touch only their own rows.
 #
 # It replays every row of public.conversation_events (the agent's event store, which Debezium publishes) as a
 # Debezium-formatted record (Schema Registry header with the cluster's schema id + JSON, the JSONB columns as
@@ -9,7 +13,7 @@
 # (camel_history.*) with the three the original consumer wrote (public.conversation_inbox, _messages and
 # _summaries): every column of every row, in both directions. It also checks that nothing was dead-lettered.
 #
-# It TRUNCATES the camel_history tables before and after. The public tables are only read.
+# The public tables are only read.
 # Needs: the cluster up, the camel_history migrations applied, python3.
 
 # shellcheck source=./common.sh
@@ -34,6 +38,22 @@ pass() { echo "  ok    $*"; }
 fail() { echo "  FAIL  $*"; FAILS=$((FAILS + 1)); }
 check() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1: expected [$2] got [$3]"; fi; }
 log_has() { local out; out="$(docker logs "${CONTAINER}" 2>&1 || true)"; grep -qE "$1" <<< "${out}"; }
+
+# The guard comes BEFORE the trap below, which empties the tables when the script ends, whatever the reason.
+WIPE=0
+for arg in "$@"; do
+  case "${arg}" in
+    --wipe-camel-history) WIPE=1 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    *) echo "unknown option: ${arg}" >&2; exit 2 ;;
+  esac
+done
+HELD="$(sql "SELECT (SELECT count(*) FROM camel_history.conversation_inbox) + (SELECT count(*) FROM camel_history.conversation_messages) + (SELECT count(*) FROM camel_history.conversation_summaries)")"
+if [ "${HELD}" != 0 ] && [ "${WIPE}" != 1 ]; then
+  echo "❌  camel_history holds ${HELD} row(s) of the live history, and this script empties those tables." >&2
+  echo "    Nothing was touched. If you can lose them, run it again with --wipe-camel-history." >&2
+  exit 2
+fi
 
 cleanup() {
   "${REPO_DIR}/scripts/devmode-local.sh" stop "${PROJECT}" >/dev/null 2>&1 || true
