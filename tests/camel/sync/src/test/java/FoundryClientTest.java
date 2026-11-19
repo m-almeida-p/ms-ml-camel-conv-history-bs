@@ -1,5 +1,4 @@
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -169,6 +168,15 @@ class FoundryClientTest {
         return m;
     }
 
+    /** A create-conversation exchange whose token broker and Foundry are the given local server (its /token says where Foundry is). */
+    private static Exchange createFor(FakeHttp server) {
+        Exchange e = new DefaultExchange(contextFor(server.url() + "/token", 2000));
+        e.getMessage().setHeader("conversationId", "c");
+        e.getMessage().setHeader("storedRole", "appUser");
+        e.getMessage().setHeader("storedText", "x");
+        return e;
+    }
+
     private Exchange forCreate(String role, String text) {
         Exchange exchange = exchange();
         exchange.getMessage().setHeader("conversationId", "jt-conv");
@@ -286,13 +294,7 @@ class FoundryClientTest {
             foundry.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"" + foundry.url() + "\",\"expiresIn\":3600}"));
             foundry.answer("/openai/v1/conversations", FakeHttp.Answer.status(status));
             FoundryClient other = new FoundryClient();
-            Exchange exchange = forCreate("appUser", "x");
-            exchange.getContext().getPropertiesComponent();
-            DefaultCamelContext c = contextFor(foundry.url() + "/token", 2000);
-            Exchange e = new DefaultExchange(c);
-            e.getMessage().setHeader("conversationId", "c");
-            e.getMessage().setHeader("storedRole", "appUser");
-            e.getMessage().setHeader("storedText", "x");
+            Exchange e = createFor(foundry);
 
             assertThrows(FoundryUnavailableException.class, () -> other.createConversation(e));
         }
@@ -305,10 +307,7 @@ class FoundryClientTest {
             foundry.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"" + foundry.url() + "\",\"expiresIn\":3600}"));
             foundry.answer("/openai/v1/conversations", new FakeHttp.Answer(status, "{\"error\":{\"code\":\"nope\",\"message\":\"" + "m".repeat(500) + "\"}}", 0));
             FoundryClient other = new FoundryClient();
-            Exchange e = new DefaultExchange(contextFor(foundry.url() + "/token", 2000));
-            e.getMessage().setHeader("conversationId", "c");
-            e.getMessage().setHeader("storedRole", "appUser");
-            e.getMessage().setHeader("storedText", "x");
+            Exchange e = createFor(foundry);
 
             assertThrows(FoundryRejectedException.class, () -> other.createConversation(e));
 
@@ -323,10 +322,7 @@ class FoundryClientTest {
             foundry.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"" + foundry.url() + "\",\"expiresIn\":3600}"));
             foundry.answer("/openai/v1/conversations", new FakeHttp.Answer(422, "<html>nope</html>", 0));
             FoundryClient other = new FoundryClient();
-            Exchange e = new DefaultExchange(contextFor(foundry.url() + "/token", 2000));
-            e.getMessage().setHeader("conversationId", "c");
-            e.getMessage().setHeader("storedRole", "appUser");
-            e.getMessage().setHeader("storedText", "x");
+            Exchange e = createFor(foundry);
 
             assertThrows(FoundryRejectedException.class, () -> other.createConversation(e));
 
@@ -336,23 +332,14 @@ class FoundryClientTest {
     }
 
     @Test
-    void foundryNotAnsweringAtAllIsUnavailable() {
-        DefaultCamelContext c = contextFor(broker.url() + "/token", 500);
+    void foundryNotAnsweringAtAllIsUnavailable() throws Exception {
         FoundryClient other = new FoundryClient();
-        FakeHttp deadEnd;
-        try {
-            deadEnd = new FakeHttp();
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-        deadEnd.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"http://127.0.0.1:1\",\"expiresIn\":3600}"));
-        Exchange e = new DefaultExchange(contextFor(deadEnd.url() + "/token", 500));
-        e.getMessage().setHeader("conversationId", "c");
-        e.getMessage().setHeader("storedRole", "appUser");
-        e.getMessage().setHeader("storedText", "x");
+        try (FakeHttp deadEnd = new FakeHttp()) {
+            deadEnd.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"t\",\"endpoint\":\"http://127.0.0.1:1\",\"expiresIn\":3600}"));
+            Exchange e = createFor(deadEnd);
 
-        assertThrows(FoundryUnavailableException.class, () -> other.createConversation(e));
-        deadEnd.close();
+            assertThrows(FoundryUnavailableException.class, () -> other.createConversation(e));
+        }
     }
 
     @Test
@@ -600,7 +587,7 @@ class FoundryClientTest {
 
             assertThrows(FoundryUnavailableException.class, () -> client.addItem(exchange), mode);
 
-            assertNull(header(exchange, "adoptJson") == null ? null : header(exchange, "adoptJson").equals("[]") ? null : "recorded");
+            assertEquals("[]", header(exchange, "adoptJson"), "nothing was recorded");
             assertEquals(1, itemsOf(conv).size());
         }
     }
@@ -781,15 +768,18 @@ class FoundryClientTest {
     }
 
     @Test
-    void theClientNeverSendsAHeaderOfTheMessageToFoundry() throws Exception {
-        Exchange exchange = forCreate("appUser", "hola");
-        exchange.getMessage().setHeader("Authorization", "Bearer the-clients-own");
-        exchange.getMessage().setHeader("X-Secret", "leak");
+    void theClientSendsTheBrokersTokenAndNeverAnAuthorizationHeaderOfTheMessage() throws Exception {
+        try (FakeHttp foundry = new FakeHttp()) {
+            foundry.answer("/token", FakeHttp.Answer.ok("{\"accessToken\":\"the-brokers\",\"endpoint\":\"" + foundry.url() + "\",\"expiresIn\":3600}"));
+            foundry.answer("/openai/v1/conversations", FakeHttp.Answer.ok("{\"id\":\"conv_1\"}"));
+            foundry.answer("/openai/v1/conversations/conv_1/items", FakeHttp.Answer.ok("{\"data\":[{\"id\":\"msg_1\"}]}"));
+            Exchange exchange = createFor(foundry);
+            exchange.getMessage().setHeader("Authorization", "Bearer the-clients-own");
 
-        client.createConversation(exchange);
+            new FoundryClient().createConversation(exchange);
 
-        assertFalse(itemsOf(header(exchange, "foundryConversationId")).isEmpty());
-        // the fake accepts any bearer, so the proof is in what the client builds: it takes the token from the broker only
-        assertTrue(broker.calls("/token") >= 1);
+            List<String> sent = foundry.requests().stream().filter(r -> !r.path().equals("/token")).map(FakeHttp.Seen::authorization).toList();
+            assertEquals(List.of("Bearer the-brokers", "Bearer the-brokers"), sent);
+        }
     }
 }

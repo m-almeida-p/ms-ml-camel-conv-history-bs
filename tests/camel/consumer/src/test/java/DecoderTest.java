@@ -18,7 +18,6 @@ import org.apache.camel.support.DefaultExchange;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -35,12 +34,18 @@ class DecoderTest {
     @BeforeEach
     void setUp() {
         decoder = new ConversationEventDecoder();
-        context = new DefaultCamelContext();
+        context = contextFor(System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"), true);
+    }
+
+    /** A Camel context with the decoder's settings (the app.schema.* values of application.properties). */
+    private static DefaultCamelContext contextFor(String registryUrl, boolean requireFraming) {
+        DefaultCamelContext context = new DefaultCamelContext();
         java.util.Properties p = new java.util.Properties();
-        p.setProperty("app.schema.registryUrl", System.getenv().getOrDefault("REGISTRY_URL", "http://schema-registry:8081"));
+        p.setProperty("app.schema.registryUrl", registryUrl);
         p.setProperty("app.schema.allowedIds", "2");
-        p.setProperty("app.schema.requireFraming", "true");
+        p.setProperty("app.schema.requireFraming", Boolean.toString(requireFraming));
         context.getPropertiesComponent().setOverrideProperties(p);
+        return context;
     }
 
     // ---- building records -------------------------------------------------------------------------------------------------
@@ -169,12 +174,7 @@ class DecoderTest {
         assertReason(refused(asObject), "schema-violation", "payload");
 
         ConversationEventDecoder plain = new ConversationEventDecoder();
-        DefaultCamelContext other = new DefaultCamelContext();
-        java.util.Properties p = new java.util.Properties();
-        p.setProperty("app.schema.registryUrl", "http://schema-registry:8081");
-        p.setProperty("app.schema.allowedIds", "2");
-        p.setProperty("app.schema.requireFraming", "false");
-        other.getPropertiesComponent().setOverrideProperties(p);
+        DefaultCamelContext other = contextFor("http://schema-registry:8081", false);
         Exchange exchange = new DefaultExchange(other);
         exchange.getMessage().setBody(JSON.writeValueAsBytes(asObject));
         plain.decode(exchange);
@@ -572,12 +572,7 @@ class DecoderTest {
     @Test
     void theRegistryBeingUnreachableIsNotTheRecordsFault() {
         ConversationEventDecoder lonely = new ConversationEventDecoder();
-        DefaultCamelContext other = new DefaultCamelContext();
-        java.util.Properties p = new java.util.Properties();
-        p.setProperty("app.schema.registryUrl", "http://127.0.0.1:1");
-        p.setProperty("app.schema.allowedIds", "2");
-        p.setProperty("app.schema.requireFraming", "true");
-        other.getPropertiesComponent().setOverrideProperties(p);
+        DefaultCamelContext other = contextFor("http://127.0.0.1:1", true);
         Exchange exchange = new DefaultExchange(other);
         try {
             exchange.getMessage().setBody(framed(event()));
@@ -593,12 +588,7 @@ class DecoderTest {
     @Test
     void anUnframedRecordIsAcceptedWhenFramingIsNotRequired() throws Exception {
         ConversationEventDecoder plain = new ConversationEventDecoder();
-        DefaultCamelContext other = new DefaultCamelContext();
-        java.util.Properties p = new java.util.Properties();
-        p.setProperty("app.schema.registryUrl", "http://schema-registry:8081");
-        p.setProperty("app.schema.allowedIds", "2");
-        p.setProperty("app.schema.requireFraming", "false");
-        other.getPropertiesComponent().setOverrideProperties(p);
+        DefaultCamelContext other = contextFor("http://schema-registry:8081", false);
         Exchange exchange = new DefaultExchange(other);
         exchange.getMessage().setBody(JSON.writeValueAsBytes(event()));
 
